@@ -1,0 +1,184 @@
+import taichi as ti
+import trimesh
+import numpy as np
+import math
+
+@ti.data_oriented
+class RigidBody:
+    def __init__(self, pos, type: str, mass, mesh, color=(0.8, 0.8, 0.8, 1.0), radius=1.0,
+                 velocity=np.zeros(3),
+                 angular_velocity=np.zeros(3),
+                 rotation_quat=np.array([1.0, 0.0, 0.0, 0.0]),
+                 mass_distribution='uniform'):
+        self.pos_of_center = ti.Vector.field(3, dtype=float, shape=()) 
+        self.pos_of_center[None] = ti.Vector(pos)
+
+        self.mass = mass
+
+        self.vel = ti.Vector.field(3, dtype=float, shape=())
+        self.vel[None] = ti.Vector(velocity)
+        self.ang_vel = ti.Vector.field(3, dtype=float, shape=())
+        self.ang_vel[None] = ti.Vector(angular_velocity)
+
+        self.quat = ti.Vector.field(4, dtype=float, shape=())
+        self.quat[None] = ti.Vector(rotation_quat)
+
+        if type == 'sphere':
+            self.mesh = trimesh.creation.icosphere(subdivisions=5, radius=radius)
+        
+        # Get the center of mass and inertia tensor relative to pos
+        self.mesh.density = self.mass / self.mesh.volume
+        inertia_tensor = self.mesh.moment_inertia
+        center_of_mass_offset = self.mesh.center_mass
+
+        self.mesh.vertices -= center_of_mass_offset  # Center the mesh at COM
+
+        self.I_inv = ti.Matrix.field(3, 3, dtype=float, shape=())
+        self.I_inv[None] = ti.Matrix(np.linalg.inv(inertia_tensor))
+
+        
+        # Move mesh from cpu to ti to get acceleration
+        vertices = self.mesh.vertices.astype(np.float32)
+        faces = self.mesh.faces.astype(np.int32)
+        self.num_vertices = vertices.shape[0]
+        self.num_faces = faces.shape[0]
+        self.vertices = ti.Vector.field(3, dtype=float, shape=self.num_vertices)
+        self.faces = ti.Vector.field(3, dtype=int, shape=self.num_faces)
+        self.vertices.from_numpy(vertices)
+        self.faces.from_numpy(faces)
+        self.radius = radius
+
+    @ti.func
+    def quat_mul(self, q1, q2):
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        return ti.Vector([
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+            w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+            w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+        ])
+    @ti.func
+    def quat_to_matrix(self, q):
+        w, x, y, z = q
+        return ti.Matrix([
+            [1 - 2 * (y**2 + z**2), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x**2 + z**2), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x**2 + y**2)]
+        ])
+    
+    @ti.func 
+    def local_to_world(self, i: int):
+        R = self.quat_to_matrix(self.quat[None])
+        return R @ self.vertices[i] + self.pos_of_center[None]
+    @ti.func
+    def is_in_triangle(self, p, a, b, c, normal):
+        # p is a point in the plane of triangle abc, then we can use this
+        ab = b - a
+        bc = c - b
+        ca = a - c
+        ap = p - a
+        bp = p - b
+        cp = p - c
+
+        return (ab.cross(ap).dot(normal) >= 0 and
+                bc.cross(bp).dot(normal) >= 0 and
+                ca.cross(cp).dot(normal) >= 0)
+
+
+    @ti.func
+    def check_mesh_collision(self, point, threshold: float):
+        min_dist = 1e8
+        closest_normal = ti.Vector([0.0, 0.0, 0.0])
+        has_collision = False
+
+        for f in range(self.num_faces):
+            idx0, idx1, idx2 = self.faces[f][0], self.faces[f][1], self.faces[f][2]
+            v0 = self.local_to_world(idx0)
+            v1 = self.local_to_world(idx1)
+            v2 = self.local_to_world(idx2)
+
+            edge1 = v1 - v0
+            edge2 = v2 - v0
+            normal = edge1.cross(edge2).normalized()
+
+            to_point = point - v0
+            distance = to_point.dot(normal)
+
+            if ti.abs(distance) < threshold:
+                proj_point = point - distance * normal
+                if self.is_in_triangle(proj_point, v0, v1, v2, normal):
+                    if ti.abs(distance) < min_dist:
+                        min_dist = ti.abs(distance)
+                        closest_normal = normal
+                        has_collision = True
+        return has_collision, closest_normal
+    
+    @ti.kernel
+    def apply_force(self, force: ti.types.vector(3, float), dt: float):
+        # F = ma => a = F / m
+        # v_new = v_old + a * dt
+        acceleration = force / self.mass
+        self.vel[None] += acceleration * dt
+    @ti.kernel
+    def apply_torque(self, torque: ti.types.vector(3, float), dt: float):
+        # tau = I * alpha => alpha = I_inv * tau
+        # ang_v_new = ang_v_old + alpha * dt
+        R = self.quat_to_matrix(self.quat[None])
+        R_inv = R.transpose()
+    
+        local_torque = R_inv @ torque
+        
+        local_alpha = self.I_inv[None] @ local_torque
+
+        world_alpha = R @ local_alpha
+        
+        self.ang_vel[None] += world_alpha * dt
+
+    @ti.kernel
+    def update(self, dt: float):
+        # Update position
+        self.pos_of_center[None] += self.vel[None] * dt
+
+        # Update rotation
+        omega = self.ang_vel[None]
+        omega_mag = omega.norm()
+        if omega_mag > 1e-8:
+            theta = omega_mag * dt
+            axis = omega / omega_mag
+            half_theta = theta * 0.5
+            sin_half_theta = ti.sin(half_theta)
+            delta_quat = ti.Vector([
+                ti.cos(half_theta),
+                axis[0] * sin_half_theta,
+                axis[1] * sin_half_theta,
+                axis[2] * sin_half_theta
+            ])
+            self.quat[None] = self.quat_mul(delta_quat, self.quat[None])
+            # Normalize quaternion
+            q = self.quat[None]
+            norm_q = ti.sqrt(q.dot(q))
+            self.quat[None] = q / norm_q
+
+@ti.kernel
+def sphere_collision_simulation(rb1: ti.template(), rb2: ti.template(), threshold: float, restitution: float):
+    p1, p2 = rb1.pos_of_center[None], rb2.pos_of_center[None]
+    v1, v2 = rb1.vel[None], rb2.vel[None]
+
+    m1, m2 = rb1.mass, rb2.mass
+    r1, r2 = rb1.radius, rb2.radius
+
+    diff = p2 - p1
+    dist = diff.norm()
+    if dist < r1 + r2 + threshold:
+        normal = diff.normalized()
+        relative_velocity = v2 - v1
+        vel_along_normal = relative_velocity.dot(normal)
+        if vel_along_normal < 0:
+            impulse_magnitude = -(1 + restitution) * vel_along_normal
+            impulse_magnitude /= (1 / m1 + 1 / m2)
+
+            impulse = impulse_magnitude * normal
+
+            rb1.vel[None] -= impulse / m1
+            rb2.vel[None] += impulse / m2
