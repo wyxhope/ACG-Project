@@ -244,6 +244,15 @@ class Fluid:
         self.gamma = gamma
         self.stiffness = 50000.0 
         self.surface_tension = 0.01 
+
+
+        self.grid_origin = ti.Vector([-2.5, -2.5, -0.5])
+        self.grid_cell_size = self.h
+        self.grid_dim = (64, 64, 64)
+
+        self.max_particles_per_cell = 100
+        self.grid_num = ti.field(dtype=int, shape=self.grid_dim)
+        self.grid = ti.field(dtype=int, shape=(*self.grid_dim, self.max_particles_per_cell))
         
         # Not use this
         self.sound_speed = sound_speed
@@ -318,15 +327,40 @@ class Fluid:
         return res
     
     @ti.kernel
+    def update_grid(self):
+        for I in ti.grouped(self.grid_num):
+            self.grid_num[I] = 0
+        
+        for i in range(self.num_particles[None]):
+            cell_idx = ((self.pos[i] - self.grid_origin) / self.grid_cell_size).cast(int)
+            if 0 <= cell_idx[0] < self.grid_dim[0] and 0 <= cell_idx[1] < self.grid_dim[1] and 0 <= cell_idx[2] < self.grid_dim[2]:
+                idx = ti.atomic_add(self.grid_num[cell_idx], 1)
+                if idx < self.max_particles_per_cell:
+                    self.grid[cell_idx, idx] = i
+    
+    @ti.kernel
     def compute_density(self):
         for i in range(self.num_particles[None]):
             self.density[i] = 0.0
-            for j in range(self.num_particles[None]):
-                r = self.pos[i] - self.pos[j]
-                r_len = r.norm()
-                if r_len < self.h:
-                    self.density[i] += self.kernel_func(r_len) * self.mass[j]
+            pos_i = self.pos[i]
+            cell_idx = ti.cast((pos_i - self.grid_origin) / self.grid_cell_size, int)
+            for offset in ti.static(ti.grouped(ti.ndrange((-1, 2), (-1, 2), (-1, 2)))):
+                neighbor_cell = cell_idx + offset
+                if 0 <= neighbor_cell[0] < self.grid_dim[0] and 0 <= neighbor_cell[1] < self.grid_dim[1] and 0 <= neighbor_cell[2] < self.grid_dim[2]:
+                    num_in_cell = self.grid_num[neighbor_cell]
+                    for j_idx in range(num_in_cell):
+                        j = self.grid[neighbor_cell, j_idx]
+                        r = pos_i - self.pos[j]
+                        r_len = r.norm()
+                        if r_len < self.h:
+                            self.density[i] += self.kernel_func(r_len) * self.mass[j]
             self.density[i] = ti.max(self.density[i], self.rest_density)
+            # for j in range(self.num_particles[None]):
+            #     r = self.pos[i] - self.pos[j]
+            #     r_len = r.norm()
+            #     if r_len < self.h:
+            #         self.density[i] += self.kernel_func(r_len) * self.mass[j]
+            # self.density[i] = ti.max(self.density[i], self.rest_density)
 
     @ti.kernel
     def compute_forces(self):
@@ -336,36 +370,72 @@ class Fluid:
 
         for i in range(self.num_particles[None]):
             self.forces[i] = self.gravity * self.mass[i]
+
+            pos_i = self.pos[i]
+            cell_idx = ti.cast((pos_i - self.grid_origin) / self.grid_cell_size, int)
+            for offset in ti.static(ti.grouped(ti.ndrange((-1, 2), (-1, 2), (-1, 2)))):
+                neighbor_cell = cell_idx + offset
+                if 0 <= neighbor_cell[0] < self.grid_dim[0] and 0 <= neighbor_cell[1] < self.grid_dim[1] and 0 <= neighbor_cell[2] < self.grid_dim[2]:
+                    num_in_cell = self.grid_num[neighbor_cell]
+                    for j_idx in range(num_in_cell):
+                        j = self.grid[neighbor_cell, j_idx]
+                        if i != j:
+                            r = self.pos[i] - self.pos[j]
+                            r_len = r.norm()
+                            if r_len < self.h:
+                                nabla_ij = self.kernel_grad(r)
+
+                                # Pressure Force
+                                pressure_term = (self.pressure[i] / (self.density[i]**2) + 
+                                                 self.pressure[j] / (self.density[j]**2))
+                                
+                                pressure_force = -self.mass[j] * pressure_term * nabla_ij
+                                
+                                # Viscosity Force
+                                v_xy = (self.vel[i] - self.vel[j]).dot(r)
+                                m_ij = (self.mass[i] + self.mass[j]) / 2.0
+                                
+                                viscosity_force = (2 * 5 * self.viscosity * m_ij / self.density[j] / 
+                                                   (r_len**2 + 0.01 * self.h**2) * v_xy * nabla_ij / self.rest_density)
+
+                                # Surface Tension
+                                surface_tension_force = ti.Vector([0.0, 0.0, 0.0])
+                                if r_len > self.particle_diameter:
+                                    surface_tension_force = -self.surface_tension / self.density[i] * self.density[j] * r * self.kernel_func(r_len)
+                                else:
+                                    surface_tension_force = -self.surface_tension / self.density[i] * self.density[j] * r * self.kernel_func(self.particle_diameter)
+                                
+                                self.forces[i] += pressure_force + viscosity_force + surface_tension_force
             
-            for j in range(self.num_particles[None]):
-                if i != j:
-                    r = self.pos[i] - self.pos[j]
-                    r_len = r.norm()
+            # for j in range(self.num_particles[None]):
+            #     if i != j:
+            #         r = self.pos[i] - self.pos[j]
+            #         r_len = r.norm()
                     
-                    if r_len < self.h:
-                        nabla_ij = self.kernel_grad(r)
+            #         if r_len < self.h:
+            #             nabla_ij = self.kernel_grad(r)
 
-                        # Pressure Force
-                        pressure_term = (self.pressure[i] / (self.density[i]**2) + 
-                                         self.pressure[j] / (self.density[j]**2))
+            #             # Pressure Force
+            #             pressure_term = (self.pressure[i] / (self.density[i]**2) + 
+            #                              self.pressure[j] / (self.density[j]**2))
                         
-                        pressure_force = -self.mass[j] * pressure_term * nabla_ij
+            #             pressure_force = -self.mass[j] * pressure_term * nabla_ij
                         
-                        # Viscosity Force
-                        v_xy = (self.vel[i] - self.vel[j]).dot(r)
-                        m_ij = (self.mass[i] + self.mass[j]) / 2.0
+            #             # Viscosity Force
+            #             v_xy = (self.vel[i] - self.vel[j]).dot(r)
+            #             m_ij = (self.mass[i] + self.mass[j]) / 2.0
                         
-                        viscosity_force = (2 * 5 * self.viscosity * m_ij / self.density[j] / 
-                                           (r_len**2 + 0.01 * self.h**2) * v_xy * nabla_ij / self.rest_density)
+            #             viscosity_force = (2 * 5 * self.viscosity * m_ij / self.density[j] / 
+            #                                (r_len**2 + 0.01 * self.h**2) * v_xy * nabla_ij / self.rest_density)
 
-                        # Surface Tension
-                        surface_tension_force = ti.Vector([0.0, 0.0, 0.0])
-                        if r_len > self.particle_diameter:
-                            surface_tension_force = -self.surface_tension / self.density[i] * self.density[j] * r * self.kernel_func(r_len)
-                        else:
-                            surface_tension_force = -self.surface_tension / self.density[i] * self.density[j] * r * self.kernel_func(self.particle_diameter)
+            #             # Surface Tension
+            #             surface_tension_force = ti.Vector([0.0, 0.0, 0.0])
+            #             if r_len > self.particle_diameter:
+            #                 surface_tension_force = -self.surface_tension / self.density[i] * self.density[j] * r * self.kernel_func(r_len)
+            #             else:
+            #                 surface_tension_force = -self.surface_tension / self.density[i] * self.density[j] * r * self.kernel_func(self.particle_diameter)
                         
-                        self.forces[i] += pressure_force + viscosity_force + surface_tension_force
+            #             self.forces[i] += pressure_force + viscosity_force + surface_tension_force
     
     @ti.kernel
     def integrate(self, dt: float):
@@ -378,6 +448,7 @@ class Fluid:
         substeps = 100
         dt /= substeps
         for _ in range(substeps):
+            self.update_grid()
             self.compute_density()
             self.compute_forces()
             self.integrate(dt)

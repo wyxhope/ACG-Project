@@ -2,6 +2,7 @@ import taichi as ti
 import trimesh
 import numpy as np
 import math
+from mesh_to_sdf import mesh_to_voxels
 
 @ti.data_oriented
 class RigidBody:
@@ -25,6 +26,9 @@ class RigidBody:
 
         if type == 'sphere':
             self.mesh = trimesh.creation.icosphere(subdivisions=5, radius=radius)
+        else:
+            if mesh is not None:
+                self.mesh = mesh
         
         # Get the center of mass and inertia tensor relative to pos
         self.mesh.density = self.mass / self.mesh.volume
@@ -47,6 +51,83 @@ class RigidBody:
         self.vertices.from_numpy(vertices)
         self.faces.from_numpy(faces)
         self.radius = radius
+
+        self.sdf_res = 64
+
+
+        import copy
+        mesh_copy = self.mesh.copy()
+
+        bounds = mesh_copy.bounds
+        bbox_min, bbox_max = bounds[0], bounds[1]
+        bbox_center = (bbox_min + bbox_max) / 2
+
+        original_extents = bbox_max - bbox_min
+        max_extent = np.max(original_extents)
+
+        voxels = mesh_to_voxels(mesh_copy, voxel_resolution=self.sdf_res, pad=False)
+        self.sdf = ti.field(dtype=float, shape=(self.sdf_res, self.sdf_res, self.sdf_res))
+        self.sdf.from_numpy(voxels)
+
+        self.half_size = max_extent / 2 
+
+        self.sdf_offset = ti.Vector(bbox_center)
+
+
+    @ti.func
+    def get_sdf(self, world_pos):
+        center = self.pos_of_center[None]
+        R = self.quat_to_matrix(self.quat[None])
+        local_pos = R.transpose() @ (world_pos - center)
+
+        local_pos_sdf = local_pos - self.sdf_offset
+
+        normalized_pos = local_pos_sdf / (self.half_size * 2) + 0.5
+        uvw = normalized_pos * self.sdf_res
+
+        dist = 1000.0
+        normal = ti.Vector([0.0, 0.0, 0.0])
+
+        if (uvw.x >= 0 and uvw.x < self.sdf_res - 1 and \
+           uvw.y >= 0 and uvw.y < self.sdf_res - 1 and \
+           uvw.z >= 0 and uvw.z < self.sdf_res - 1):
+            base = ti.cast(ti.floor(uvw), ti.i32)
+            frac = uvw - base
+
+            c000 = self.sdf[base]
+            c100 = self.sdf[base + ti.Vector([1, 0, 0])]
+            c010 = self.sdf[base + ti.Vector([0, 1, 0])]
+            c110 = self.sdf[base + ti.Vector([1, 1, 0])]
+            c001 = self.sdf[base + ti.Vector([0, 0, 1])]
+            c101 = self.sdf[base + ti.Vector([1, 0, 1])]
+            c011 = self.sdf[base + ti.Vector([0, 1, 1])]
+            c111 = self.sdf[base + ti.Vector([1, 1, 1])]
+
+            lerp_x_00 = c000 * (1 - frac.x) + c100 * frac.x
+            lerp_x_10 = c010 * (1 - frac.x) + c110 * frac.x
+            lerp_x_01 = c001 * (1 - frac.x) + c101 * frac.x
+            lerp_x_11 = c011 * (1 - frac.x) + c111 * frac.x
+
+            lerp_y_0 = lerp_x_00 * (1 - frac.y) + lerp_x_10 * frac.y
+            lerp_y_1 = lerp_x_01 * (1 - frac.y) + lerp_x_11 * frac.y
+
+            dist = lerp_y_0 * (1 - frac.z) + lerp_y_1 * frac.z
+
+            dist = dist * self.half_size * 2
+
+            dx = (self.sdf[base + ti.Vector([1, 0, 0])] - self.sdf[base + ti.Vector([-1, 0, 0])]) 
+            dy = (self.sdf[base + ti.Vector([0, 1, 0])] - self.sdf[base + ti.Vector([0, -1, 0])]) 
+            dz = (self.sdf[base + ti.Vector([0, 0, 1])] - self.sdf[base + ti.Vector([0, 0, -1])]) 
+
+            local_normal = ti.Vector([dx, dy, dz])
+            if local_normal.norm() > 1e-8:
+                local_normal = local_normal.normalized()
+            else:
+                local_normal = ti.Vector([0.0, 0.0, 0.0])
+            normal = R @ local_normal
+        
+        return dist, normal
+
 
     @ti.func
     def quat_mul(self, q1, q2):
