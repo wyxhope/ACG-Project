@@ -37,6 +37,9 @@ if not os.path.exists(fluid_online_output_dir):
 fluid_rigid_output_dir = os.path.join(output_dir, "fluid_rigid_simulation")
 if not os.path.exists(fluid_rigid_output_dir):
     os.makedirs(fluid_rigid_output_dir)
+duck_output_dir = os.path.join(output_dir, "duck_simulation")
+if not os.path.exists(duck_output_dir):
+    os.makedirs(duck_output_dir)
 
 def rigid_body_simulation():
     rigid = RigidBody(pos=[0,0,2], type='sphere', mass=1.0, mesh=None, radius=1.0)
@@ -304,12 +307,83 @@ def rigid_fluid_interaction_simulation():
     make_video(fluid_rigid_output_dir, video_path, fps=30)
     print(f"Done! Video saved to {video_path}")
 
+def duck_simulation():
+    particle_radius = 0.02
+    num_frames = 100
+    dt = 1.0 / 30.0
+
+    print("=== Starting Online Simulation & Rendering ===")
+
+    # 1. 初始化物理引擎
+    container_size = [4.0, 4.0, 4.0]
+    container_pos = [-2.0, -2.0, 0.0] 
+    container = Container(position=container_pos, boundary_box=container_size)
+    
+    fluid_pos = [-1.0, -1.0, 0.5]
+    fluid = Fluid(max_particles=500000, init_box=(2.0, 2.0, 2.0), position=fluid_pos, particle_radius=particle_radius, viscosity=1.0)
+    fluid.init_cube(spacing=particle_radius*2.0) 
+
+    obj_path = os.path.join(project_dir, "data", "Duck_1204072310_texture_obj", "Duck_1204072310_texture.obj")
+    mesh = trimesh.load(obj_path)
+    rigid_body = RigidBody(pos=[0,0,4], type='mesh', mass=1.0, mesh=mesh, radius=0.5)
+
+    simulator = FluidSimulator(fluid, container, rigid_bodies=[rigid_body])
+
+
+
+    # 2. 初始化渲染器
+    # 注意：这里直接使用 fluid_output_dir，或者你可以新建一个 fluid_online_output_dir
+    renderer = Renderer(output_dir=duck_output_dir)
+    renderer.set_camera(location=[-2, -11, 5], rotation_euler=[math.radians(72), 0.0, math.radians(-10)])
+    renderer.setup_world(strength=1.2)
+    
+    # 加载容器
+    renderer.add_static_mesh(container.mesh, name="GlassContainer", material_names="Glass")
+    renderer.load_obj(obj_path, name="Duck", scale=(1,1,1), set_origin_to_geometry=True)
+    renderer.objects["GlassContainer"].hide_render = True 
+    renderer.objects["GlassContainer"].hide_viewport = True
+
+    # 3. 主循环：模拟 -> 传输 -> 渲染
+    for frame in range(num_frames):
+        # --- A. 物理计算 (GPU) ---
+        simulator.step(dt)
+        
+        # --- B. 数据传输 (内存复制, 极快) ---
+        # 获取有效粒子数
+        num_p = fluid.num_particles[None]
+        # 获取 numpy 数组 (切片只取有效部分)
+        # 注意：to_numpy() 会将数据从 GPU 显存拉回 CPU 内存
+        positions = fluid.pos.to_numpy()[:num_p]
+        
+        # --- C. 更新 Blender (内存操作) ---
+        # 调用我们在 Renderer 中新加的 update_fluid 方法
+        renderer.update_fluid(positions, name="Water", particle_radius=particle_radius)
+
+        renderer.update_rigid_body(rigid_body, name="Duck", material_parameters={'color': (0.1, 0.1, 0.8, 1.0), 'metallic': 0.5, 'roughness': 0.3})
+        
+        # --- D. 渲染 (GPU/CPU) ---
+        renderer.render_frame(frame)
+        
+        print(f"Finished Frame {frame}/{num_frames}")
+
+    # 4. 保存调试场景
+    debug_blend_path = os.path.join(output_dir, "debug_online_scene.blend")
+    renderer.save_blend(debug_blend_path)
+    print(f"Debug scene saved to: {debug_blend_path}")
+
+    # 5. 生成视频
+    print("Creating video...")
+    video_path = os.path.join(video_dir, "fluid_rigid_render.mp4")
+    make_video(duck_output_dir, video_path, fps=30)
+    print(f"Done! Video saved to {video_path}")
+
 def main():
     # rigid_body_simulation()
     # rigid_sphere_collision_simulation()
     # fluid_simulation()
     # fluid_online_simulation()
-    rigid_fluid_interaction_simulation()
+    # rigid_fluid_interaction_simulation()
+    duck_simulation()
 
 
 

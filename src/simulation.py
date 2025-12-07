@@ -184,6 +184,47 @@ class Renderer:
                 principled_bsdf.inputs['Roughness'].default_value = 0.2
                 principled_bsdf.inputs['Base Color'].default_value = (0.8, 0.8, 0.8, 1.0)
     
+    def load_obj(self, filepath, name, scale=(1.0, 1.0, 1.0), set_origin_to_geometry=True):
+        """
+        Load an OBJ file with textures/materials.
+        """
+        if name in self.objects:
+            return self.objects[name]
+
+        # Deselect all
+        bpy.ops.object.select_all(action='DESELECT')
+
+        # Import OBJ
+        # Check for different Blender versions
+        if hasattr(bpy.ops.wm, 'obj_import'):
+            bpy.ops.wm.obj_import(filepath=filepath)
+        elif hasattr(bpy.ops.import_scene, 'obj'):
+            bpy.ops.import_scene.obj(filepath=filepath)
+        else:
+            print("Error: No OBJ importer found.")
+            return None
+
+        # Get imported object(s)
+        selected_objects = bpy.context.selected_objects
+        if not selected_objects:
+            print(f"Warning: No objects imported from {filepath}")
+            return None
+        
+        # Assume the first selected object is the main mesh
+        obj = selected_objects[0]
+        obj.name = name
+        obj.scale = scale
+
+        # Important: RigidBody simulation usually centers the mesh at the center of mass.
+        # We need to do the same in Blender to match the position/rotation.
+        if set_origin_to_geometry:
+            bpy.context.view_layer.objects.active = obj
+            # Set origin to center of volume (closest to center of mass)
+            bpy.ops.object.origin_set(type='ORIGIN_CENTER_OF_VOLUME', center='MEDIAN')
+
+        self.objects[name] = obj
+        return obj
+    
     
     def _ensure_fluid_object(self, name, particle_radius):
         if name in self.objects:
