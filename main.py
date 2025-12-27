@@ -17,32 +17,13 @@ from src.fluid import *
 from src.rigid_fluid import FluidSimulator
 from src.simulation import Renderer
 from src.make_video import make_video
+from src.cloth import Cloth
 
 ti.init(arch=ti.gpu)
 
 project_dir = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.join(project_dir, "output")
 video_dir = os.path.join(output_dir, "video")
-if not os.path.exists(video_dir):
-    os.makedirs(video_dir)
-ply_dir = os.path.join(output_dir, "ply")
-if not os.path.exists(ply_dir):
-    os.makedirs(ply_dir)
-fluid_output_dir = os.path.join(output_dir, "fluid_simulation")
-if not os.path.exists(fluid_output_dir):
-    os.makedirs(fluid_output_dir)
-fluid_online_output_dir = os.path.join(output_dir, "fluid_online_simulation")
-if not os.path.exists(fluid_online_output_dir):
-    os.makedirs(fluid_online_output_dir)
-fluid_rigid_output_dir = os.path.join(output_dir, "fluid_rigid_simulation")
-if not os.path.exists(fluid_rigid_output_dir):
-    os.makedirs(fluid_rigid_output_dir)
-duck_output_dir = os.path.join(output_dir, "duck_simulation")
-if not os.path.exists(duck_output_dir):
-    os.makedirs(duck_output_dir)
-cloth_output_dir = os.path.join(output_dir, "cloth_simulation")
-if not os.path.exists(cloth_output_dir):
-    os.makedirs(cloth_output_dir)
 
 def rigid_body_simulation():
     rigid = RigidBody(pos=[0,0,2], type='sphere', mass=1.0, mesh=None, radius=1.0)
@@ -101,9 +82,9 @@ def rigid_sphere_collision_simulation():
     make_video(output_dir_collision, video_path, fps=50)
     print(f"Video saved to {video_path}")
 
-def fluid_simulation():
+def fluid_simulation(ply_dir, fluid_output_dir):
     particle_radius = 0.03
-    def run_simulation_export(num_frames=100):
+    def run_simulation_export(num_frames=10):
         print("=== Phase 1: Starting Simulation & Export ===")
         
 
@@ -183,7 +164,7 @@ def fluid_simulation():
     run_simulation_export(num_frames=num_frames)
     render_simulation_import(num_frames=num_frames)
 
-def fluid_online_simulation():
+def fluid_online_simulation(fluid_online_output_dir):
     particle_radius = 0.02
     num_frames = 150
     dt = 1.0 / 30.0
@@ -243,7 +224,7 @@ def fluid_online_simulation():
     make_video(fluid_online_output_dir, video_path, fps=30)
     print(f"Done! Video saved to {video_path}")
 
-def rigid_fluid_interaction_simulation():
+def rigid_fluid_interaction_simulation(fluid_rigid_output_dir):
     particle_radius = 0.02
     num_frames = 100
     dt = 1.0 / 30.0
@@ -310,7 +291,7 @@ def rigid_fluid_interaction_simulation():
     make_video(fluid_rigid_output_dir, video_path, fps=30)
     print(f"Done! Video saved to {video_path}")
 
-def duck_simulation():
+def duck_simulation(duck_output_dir):
     particle_radius = 0.02
     num_frames = 150
     dt = 1.0 / 30.0
@@ -335,8 +316,6 @@ def duck_simulation():
 
 
 
-    # 2. 初始化渲染器
-    # 注意：这里直接使用 fluid_output_dir，或者你可以新建一个 fluid_online_output_dir
     renderer = Renderer(output_dir=duck_output_dir)
     renderer.set_camera(location=[-2, -11, 5], rotation_euler=[math.radians(72), 0.0, math.radians(-10)])
     renderer.setup_world(strength=1.2)
@@ -381,13 +360,52 @@ def duck_simulation():
     make_video(duck_output_dir, video_path, fps=30)
     print(f"Done! Video saved to {video_path}")
 
+def cloth_simulation():
+    print("=== Starting Cloth Simulation ===")
+    
+    # 1. 初始化刚体 (一个静止的球体作为碰撞物)
+    rigid = RigidBody(pos=[0, 0, 0], type='sphere', mass=10.0, mesh=None, radius=1.0, is_fixed=True)
+    # 让刚体稍微有一点旋转，测试摩擦力
+
+    # 2. 初始化布料
+    # N=64 表示 64x64 的网格
+    # pos_center 在刚体上方
+    cloth = Cloth(N=40, pos_center=[0, 0, 2.5], size=3.0, stiffness=300.0, damping=20.0, mass=10.0)
+
+    # 3. 初始化渲染器
+    cloth_output_dir = os.path.join(output_dir, "cloth_simulation")
+    if not os.path.exists(cloth_output_dir):
+        os.makedirs(cloth_output_dir)
+        
+    renderer = Renderer(output_dir=cloth_output_dir)
+    renderer.set_camera(location=[0, -9, 4], rotation_euler=[math.radians(70), 0, 0])
+    renderer.setup_world(strength=1.0)
+    
+    # 渲染循环
+    num_frames = 200
+    dt = 1.0 / 50.0
+    
+    for frame in range(num_frames):
+        # 物理步进：传入 rigid_bodies 列表进行耦合
+        cloth.step(dt, rigid_bodies=[rigid])
+        
+        # 刚体也需要更新 (如果它是动态的)
+        rigid.update(dt)
+        
+        # 更新 Blender
+        renderer.update_cloth(cloth, name="Silk", material_params={'color':(0.9, 0.9, 0.9, 1.0), 'roughness': 0.5})
+        renderer.update_rigid_body(rigid, name="Sphere", material_parameters={'color': (0.1, 0.1, 0.8, 1.0), 'metallic': 0.5, 'roughness': 0.3})
+        
+        renderer.render_frame(frame)
+        print(f"Frame {frame}/{num_frames} done.")
+
+    # 生成视频
+    video_path = os.path.join(video_dir, "cloth_simulation.mp4")
+    make_video(cloth_output_dir, video_path, fps=50)
+    print(f"Video saved to {video_path}")
+
 def main():
-    # rigid_body_simulation()
-    # rigid_sphere_collision_simulation()
-    # fluid_simulation()
-    # fluid_online_simulation()
-    # rigid_fluid_interaction_simulation()
-    duck_simulation()
+    cloth_simulation()
 
 
 

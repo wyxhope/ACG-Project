@@ -6,9 +6,9 @@ import os
 
 class Renderer:
     def __init__(self, output_dir, resolution=(1280, 720)):
-        self.output_dir = output_dir
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
+        self.output_dir = output_dir
 
         bpy.ops.wm.read_homefile(use_empty=True)
 
@@ -419,6 +419,64 @@ class Renderer:
             mesh.vertices.foreach_set("co", positions)
         
         mesh.update()
+    
+    def update_cloth(self, cloth_sim, name="Cloth", material_params=None):
+        """
+        渲染布料
+        :param cloth_sim: src.cloth.Cloth 实例
+        """
+        positions = cloth_sim.pos.to_numpy().reshape(-1, 3)
+        print("Cloth pos min/max:", positions.min(), positions.max())
+        
+        if name not in self.objects:
+            # 1. 首次创建：需要定义顶点和面
+            indices = cloth_sim.get_indices()
+            # Blender expects faces as list of tuples/lists. Since triangles, step by 3
+            faces = indices.reshape(-1, 3).tolist()
+            
+            mesh = bpy.data.meshes.new(name + "_Mesh")
+            mesh.from_pydata(positions.tolist(), [], faces)
+            mesh.update() # 计算法线等
+            
+            obj = bpy.data.objects.new(name, mesh)
+            self.scene.collection.objects.link(obj)
+            self.objects[name] = obj
+            
+            # 设置材质
+            mat_args = {
+                'color': (0.8, 0.2, 0.2, 1.0), # 红色布料
+                'metallic': 0.0,
+                'roughness': 0.8 # 布料通常比较粗糙
+            }
+            if material_params:
+                mat_args.update(material_params)
+            
+            mat = self.get_material(name + "_Mat", **mat_args)
+            
+            # 添加一些布料特有的材质节点调整 (可选)
+            if mat.node_tree.nodes.get('Principled BSDF'):
+                bsdf = mat.node_tree.nodes['Principled BSDF']
+                # Sheen (光泽) 对布料模拟很重要
+                if 'Sheen' in bsdf.inputs:
+                    bsdf.inputs['Sheen'].default_value = 0.5 
+            
+            obj.data.materials.append(mat)
+            
+            # 设置平滑着色
+            for poly in mesh.polygons:
+                poly.use_smooth = True
+                
+        else:
+            # 2. 后续更新：只更新顶点位置，拓扑不变（非常快）
+            obj = self.objects[name]
+            mesh = obj.data
+            
+            if len(mesh.vertices) != len(positions):
+                print("Error: Vertex count mismatch for cloth update.")
+                return
+            
+            mesh.vertices.foreach_set("co", positions.flatten())
+            mesh.update() # 重新计算法线
     
     def save_blend(self, filepath):
         folder = os.path.dirname(filepath)

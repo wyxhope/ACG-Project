@@ -11,6 +11,7 @@ class RigidBody:
                  angular_velocity=np.zeros(3),
                  rotation_quat=np.array([1.0, 0.0, 0.0, 0.0]),
                  scale=(1.0, 1.0, 1.0),
+                 is_fixed=False,
                  mass_distribution='uniform'):
         self.pos_of_center = ti.Vector.field(3, dtype=float, shape=()) 
         self.pos_of_center[None] = ti.Vector(pos)
@@ -24,6 +25,8 @@ class RigidBody:
 
         self.quat = ti.Vector.field(4, dtype=float, shape=())
         self.quat[None] = ti.Vector(rotation_quat)
+
+        self.is_fixed = is_fixed
 
         if type == 'sphere':
             self.mesh = trimesh.creation.icosphere(subdivisions=5, radius=radius)
@@ -223,27 +226,28 @@ class RigidBody:
     @ti.kernel
     def update(self, dt: float):
         # Update position
-        self.pos_of_center[None] += self.vel[None] * dt
+        if not self.is_fixed:
+            self.pos_of_center[None] += self.vel[None] * dt
 
-        # Update rotation
-        omega = self.ang_vel[None]
-        omega_mag = omega.norm()
-        if omega_mag > 1e-8:
-            theta = omega_mag * dt
-            axis = omega / omega_mag
-            half_theta = theta * 0.5
-            sin_half_theta = ti.sin(half_theta)
-            delta_quat = ti.Vector([
-                ti.cos(half_theta),
-                axis[0] * sin_half_theta,
-                axis[1] * sin_half_theta,
-                axis[2] * sin_half_theta
-            ])
-            self.quat[None] = self.quat_mul(delta_quat, self.quat[None])
-            # Normalize quaternion
-            q = self.quat[None]
-            norm_q = ti.sqrt(q.dot(q))
-            self.quat[None] = q / norm_q
+            # Update rotation
+            omega = self.ang_vel[None]
+            omega_mag = omega.norm()
+            if omega_mag > 1e-8:
+                theta = omega_mag * dt
+                axis = omega / omega_mag
+                half_theta = theta * 0.5
+                sin_half_theta = ti.sin(half_theta)
+                delta_quat = ti.Vector([
+                    ti.cos(half_theta),
+                    axis[0] * sin_half_theta,
+                    axis[1] * sin_half_theta,
+                    axis[2] * sin_half_theta
+                ])
+                self.quat[None] = self.quat_mul(delta_quat, self.quat[None])
+                # Normalize quaternion
+                q = self.quat[None]
+                norm_q = ti.sqrt(q.dot(q))
+                self.quat[None] = q / norm_q
 
 @ti.kernel
 def sphere_collision_simulation(rb1: ti.template(), rb2: ti.template(), threshold: float, restitution: float):

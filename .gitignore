@@ -1,5 +1,5 @@
 output/
 rigid_body_simulation.mp4
-requirements.txt
+*.txt
 src/__pycache__/
 proposal/
