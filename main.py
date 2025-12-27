@@ -40,6 +40,9 @@ if not os.path.exists(fluid_rigid_output_dir):
 duck_output_dir = os.path.join(output_dir, "duck_simulation")
 if not os.path.exists(duck_output_dir):
     os.makedirs(duck_output_dir)
+cloth_output_dir = os.path.join(output_dir, "cloth_simulation")
+if not os.path.exists(cloth_output_dir):
+    os.makedirs(cloth_output_dir)
 
 def rigid_body_simulation():
     rigid = RigidBody(pos=[0,0,2], type='sphere', mass=1.0, mesh=None, radius=1.0)
@@ -182,7 +185,7 @@ def fluid_simulation():
 
 def fluid_online_simulation():
     particle_radius = 0.02
-    num_frames = 100
+    num_frames = 150
     dt = 1.0 / 30.0
 
     print("=== Starting Online Simulation & Rendering ===")
@@ -195,7 +198,7 @@ def fluid_online_simulation():
     fluid_pos = [-1.0, -1.0, 0.5]
     fluid = Fluid(max_particles=500000, init_box=(2.0, 2.0, 2.0), position=fluid_pos, particle_radius=particle_radius, viscosity=1.0)
     fluid.init_cube(spacing=particle_radius*2.0) 
-    simulator = FluidSimulator(fluid, container)
+    simulator = FluidSimulator(fluid, container, rigid_bodies=[], has_rigid=False)
 
     # 2. 初始化渲染器
     # 注意：这里直接使用 fluid_output_dir，或者你可以新建一个 fluid_online_output_dir
@@ -309,7 +312,7 @@ def rigid_fluid_interaction_simulation():
 
 def duck_simulation():
     particle_radius = 0.02
-    num_frames = 100
+    num_frames = 150
     dt = 1.0 / 30.0
 
     print("=== Starting Online Simulation & Rendering ===")
@@ -325,9 +328,10 @@ def duck_simulation():
 
     obj_path = os.path.join(project_dir, "data", "Duck_1204072310_texture_obj", "Duck_1204072310_texture.obj")
     mesh = trimesh.load(obj_path)
-    rigid_body = RigidBody(pos=[0,0,4], type='mesh', mass=1.0, mesh=mesh, radius=0.5)
+    init_quat = np.array([0.7071, 0.7071, 0.0, 0.0])  # 90 degrees around x-axis
+    rigid_body = RigidBody(pos=[0,0,4], type='mesh', mass=2.0, mesh=mesh, radius=0.5, rotation_quat=init_quat, scale=(0.8, 0.8, 0.8))
 
-    simulator = FluidSimulator(fluid, container, rigid_bodies=[rigid_body])
+    simulator = FluidSimulator(fluid, container, rigid_bodies=[rigid_body], has_rigid=True)
 
 
 
@@ -373,7 +377,7 @@ def duck_simulation():
 
     # 5. 生成视频
     print("Creating video...")
-    video_path = os.path.join(video_dir, "fluid_rigid_render.mp4")
+    video_path = os.path.join(video_dir, "duck_fluid_render.mp4")
     make_video(duck_output_dir, video_path, fps=30)
     print(f"Done! Video saved to {video_path}")
 

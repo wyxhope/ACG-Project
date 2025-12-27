@@ -5,14 +5,18 @@ from .fluid import Fluid, Container
 
 @ti.data_oriented
 class FluidSimulator:
-    def __init__(self, fluid: Fluid, container: Container, rigid_bodies: list[RigidBody]):
+    def __init__(self, fluid: Fluid, container: Container, rigid_bodies: list[RigidBody], has_rigid: bool = True):
         self.fluid = fluid
         self.container = container
-        self.rigid_bodies = rigid_bodies[0] # Now only use 1 rigid body, maybe not extend
+        self.has_rigid = has_rigid
+        if has_rigid:
+            self.rigid_bodies = rigid_bodies[0] # Now only use 1 rigid body, maybe not extend
     
     @ti.kernel
     def solve_rigid_interaction(self, dt: float):
         # 获取刚体对象
+        if ti.static(not self.has_rigid):
+            return
         rb = self.rigid_bodies
         
         for i in range(self.fluid.num_particles[None]):
@@ -89,11 +93,11 @@ class FluidSimulator:
             self.fluid.compute_density()
             self.fluid.compute_forces()
 
-            if self.rigid_bodies:
+            if self.has_rigid:
                 gravity_force = ti.Vector([0.0, 0.0, -9.8]) * self.rigid_bodies.mass
                 self.rigid_bodies.apply_force(gravity_force, sub_dt)
                 self.solve_rigid_interaction(sub_dt)
             self.fluid.integrate(sub_dt)
             self.container.enforce_boundary(self.fluid)
-            if self.rigid_bodies:
+            if self.has_rigid:
                 self.rigid_bodies.update(sub_dt)

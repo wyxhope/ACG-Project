@@ -10,6 +10,7 @@ class RigidBody:
                  velocity=np.zeros(3),
                  angular_velocity=np.zeros(3),
                  rotation_quat=np.array([1.0, 0.0, 0.0, 0.0]),
+                 scale=(1.0, 1.0, 1.0),
                  mass_distribution='uniform'):
         self.pos_of_center = ti.Vector.field(3, dtype=float, shape=()) 
         self.pos_of_center[None] = ti.Vector(pos)
@@ -29,6 +30,9 @@ class RigidBody:
         else:
             if mesh is not None:
                 self.mesh = mesh
+        
+        if self.mesh is not None:
+            self.mesh.apply_scale(scale)
         
         # Get the center of mass and inertia tensor relative to pos
         self.mesh.density = self.mass / self.mesh.volume
