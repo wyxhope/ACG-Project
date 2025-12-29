@@ -3,7 +3,7 @@ import numpy as np
 
 @ti.data_oriented
 class Cloth:
-    def __init__(self, N, pos_center, size, stiffness=1000.0, damping=2.0, mass=1.0):
+    def __init__(self, N, pos_center, size, stiffness=1000.0, damping=2.0, mass=1.0, is_curtain=False, compress_ratio=0.5):
         self.N = N
         self.num_particles = N * N
         self.pos = ti.Vector.field(3, dtype=float, shape=(N, N))
@@ -12,6 +12,10 @@ class Cloth:
         self.mass = mass / (N * N)
         self.stiffness = stiffness
         self.damping = damping
+
+        self.is_fixed = ti.field(dtype=ti.int32, shape=(N, N))
+        self.is_curtain = is_curtain
+        self.compress_ratio = compress_ratio
         
         # 弹簧连接关系 (x偏移, y偏移, 弹簧原长系数, 刚度系数)
         self.spring_offsets = []
@@ -29,7 +33,10 @@ class Cloth:
         self.spring_offsets.append(ti.Vector([0, 2]))
 
         self.rest_len = size / (N - 1)
-        self.init_pos(pos_center, size)
+        if self.is_curtain:
+            self.initialize_curtain(pos_center, size)
+        else:
+            self.init_pos(pos_center, size)
 
     # @ti.kernel
     # def init_pos(self, center: ti.types.vector(3, float), size: float):
@@ -48,6 +55,20 @@ class Cloth:
                                     pos_center[2]])
             self.vel[i, j] = ti.Vector([0, 0, 0])
             self.force[i, j] = ti.Vector([0, 0, 0])
+            self.is_fixed[i, j] = 0
+    
+    @ti.kernel
+    def initialize_curtain(self, pos_center: ti.types.vector(3, float), size: float):
+        for i, j in self.pos:
+            # 关键修改：i 控制水平方向，乘以 compress_ratio 产生预设折皱
+            orig_x = (i / (self.N - 1) - 0.5) * size
+            x = orig_x * self.compress_ratio 
+            y = 0.0
+            z = (j / (self.N - 1) - 1.0) * size + pos_center[2]
+            
+            self.pos[i, j] = ti.Vector([x + pos_center[0], y + pos_center[1], z])
+            self.vel[i, j] = ti.Vector([0, 0, 0])
+            self.is_fixed[i, j] = 0
 
     @ti.kernel
     def compute_forces(self, gravity: ti.types.vector(3, float)):
@@ -89,15 +110,33 @@ class Cloth:
                         
                         self.force[i, j] += total_force_vec
                         self.force[ni, nj] -= total_force_vec
+    
+
+    @ti.kernel
+    def apply_wind(self, time: float):
+        """
+        Apply a simple time-varying wind force to the cloth in y-direction. 
+        """
+        for i, j in self.pos:
+            wind_strength = 0.002 * ti.sin(time * 2.0) 
+            noise = 0.0005 * ti.cos(i * 0.2 + time) * ti.sin(j * 0.2 + time)
+            
+            wind_force = ti.Vector([0.0, wind_strength, 0.0])
+            self.force[i, j] += wind_force
+
+    
 
     @ti.kernel
     def update(self, dt: float):
         for i, j in self.pos:
             # Simple Semi-implicit Euler
-            acc = self.force[i, j] / self.mass
-            self.vel[i, j] += acc * dt
-            self.pos[i, j] += self.vel[i, j] * dt
-    
+            if self.is_fixed[i, j] == 0:
+                acc = self.force[i, j] / self.mass
+                self.vel[i, j] += acc * dt
+                self.pos[i, j] += self.vel[i, j] * dt
+            else:
+                self.vel[i, j] = ti.Vector([0.0, 0.0, 0.0])
+                
     @ti.kernel
     def solve_rigid_collision(self, rb: ti.template()):
         """
@@ -113,7 +152,7 @@ class Cloth:
             dist, normal = rb.get_sdf(pos)
             
             # 2. 简单的碰撞阈值 (稍微留一点厚度)
-            thickness = 0.08
+            thickness = 0.1
             
             if dist < thickness:
                 # 穿透深度
@@ -147,13 +186,14 @@ class Cloth:
                     ti.atomic_add(rb.vel[None], -impulse * normal / rb.mass)
 
 
-    def step(self, dt, rigid_bodies=None):
-        substeps = 300
+    def step(self, dt, rigid_bodies=None, substeps=100, wind_t=None):
         dt /= substeps
         gravity = ti.Vector([0.0, 0.0, -9.8])
         
         for _ in range(substeps):
             self.compute_forces(gravity)
+            if wind_t is not None:
+                self.apply_wind(wind_t)
             self.update(dt)
             if rigid_bodies:
                 # 假设只处理第一个刚体

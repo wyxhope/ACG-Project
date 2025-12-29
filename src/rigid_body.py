@@ -28,6 +28,8 @@ class RigidBody:
 
         self.is_fixed = is_fixed
 
+        self.type = type
+
         if type == 'sphere':
             self.mesh = trimesh.creation.icosphere(subdivisions=5, radius=radius)
         else:
@@ -83,55 +85,67 @@ class RigidBody:
 
     @ti.func
     def get_sdf(self, world_pos):
-        center = self.pos_of_center[None]
-        R = self.quat_to_matrix(self.quat[None])
-        local_pos = R.transpose() @ (world_pos - center)
-
-        local_pos_sdf = local_pos - self.sdf_offset
-
-        normalized_pos = local_pos_sdf / (self.half_size * 2) + 0.5
-        uvw = normalized_pos * self.sdf_res
-
-        dist = 1000.0
+        dist = 0.0
         normal = ti.Vector([0.0, 0.0, 0.0])
 
-        if (uvw.x >= 0 and uvw.x < self.sdf_res - 1 and \
-           uvw.y >= 0 and uvw.y < self.sdf_res - 1 and \
-           uvw.z >= 0 and uvw.z < self.sdf_res - 1):
-            base = ti.cast(ti.floor(uvw), ti.i32)
-            frac = uvw - base
-
-            c000 = self.sdf[base]
-            c100 = self.sdf[base + ti.Vector([1, 0, 0])]
-            c010 = self.sdf[base + ti.Vector([0, 1, 0])]
-            c110 = self.sdf[base + ti.Vector([1, 1, 0])]
-            c001 = self.sdf[base + ti.Vector([0, 0, 1])]
-            c101 = self.sdf[base + ti.Vector([1, 0, 1])]
-            c011 = self.sdf[base + ti.Vector([0, 1, 1])]
-            c111 = self.sdf[base + ti.Vector([1, 1, 1])]
-
-            lerp_x_00 = c000 * (1 - frac.x) + c100 * frac.x
-            lerp_x_10 = c010 * (1 - frac.x) + c110 * frac.x
-            lerp_x_01 = c001 * (1 - frac.x) + c101 * frac.x
-            lerp_x_11 = c011 * (1 - frac.x) + c111 * frac.x
-
-            lerp_y_0 = lerp_x_00 * (1 - frac.y) + lerp_x_10 * frac.y
-            lerp_y_1 = lerp_x_01 * (1 - frac.y) + lerp_x_11 * frac.y
-
-            dist = lerp_y_0 * (1 - frac.z) + lerp_y_1 * frac.z
-
-            dist = dist * self.half_size * 2
-
-            dx = (self.sdf[base + ti.Vector([1, 0, 0])] - self.sdf[base + ti.Vector([-1, 0, 0])]) 
-            dy = (self.sdf[base + ti.Vector([0, 1, 0])] - self.sdf[base + ti.Vector([0, -1, 0])]) 
-            dz = (self.sdf[base + ti.Vector([0, 0, 1])] - self.sdf[base + ti.Vector([0, 0, -1])]) 
-
-            local_normal = ti.Vector([dx, dy, dz])
-            if local_normal.norm() > 1e-8:
-                local_normal = local_normal.normalized()
+        # 使用 ti.static 进行编译时分支检查，优化性能
+        if ti.static(self.type == 'sphere'):
+            # --- 球体解析解析解 ---
+            # 直接使用几何公式：dist = ||p - center|| - radius
+            p_rel = world_pos - self.pos_of_center[None]
+            d_norm = p_rel.norm()
+            dist = d_norm - self.radius
+            
+            # 法线从球心指向外部
+            if d_norm > 1e-6:
+                normal = p_rel / d_norm
             else:
-                local_normal = ti.Vector([0.0, 0.0, 0.0])
-            normal = R @ local_normal
+                normal = ti.Vector([0.0, 0.0, 1.0])
+        else:
+            # --- 原有的通用网格 SDF 查询逻辑 ---
+            center = self.pos_of_center[None]
+            R = self.quat_to_matrix(self.quat[None])
+            local_pos = R.transpose() @ (world_pos - center)
+            local_pos_sdf = local_pos - self.sdf_offset
+
+            normalized_pos = local_pos_sdf / (self.half_size * 2) + 0.5
+            uvw = normalized_pos * self.sdf_res
+
+            dist = 1000.0
+            if (uvw.x >= 0 and uvw.x < self.sdf_res - 1 and \
+                uvw.y >= 0 and uvw.y < self.sdf_res - 1 and \
+                uvw.z >= 0 and uvw.z < self.sdf_res - 1):
+                base = ti.cast(ti.floor(uvw), ti.i32)
+                frac = uvw - base
+
+                # 三线性插值计算距离
+                c000 = self.sdf[base]
+                c100 = self.sdf[base + ti.Vector([1, 0, 0])]
+                c010 = self.sdf[base + ti.Vector([0, 1, 0])]
+                c110 = self.sdf[base + ti.Vector([1, 1, 0])]
+                c001 = self.sdf[base + ti.Vector([0, 0, 1])]
+                c101 = self.sdf[base + ti.Vector([1, 0, 1])]
+                c011 = self.sdf[base + ti.Vector([0, 1, 1])]
+                c111 = self.sdf[base + ti.Vector([1, 1, 1])]
+
+                lerp_x_00 = c000 * (1 - frac.x) + c100 * frac.x
+                lerp_x_10 = c010 * (1 - frac.x) + c110 * frac.x
+                lerp_x_01 = c001 * (1 - frac.x) + c101 * frac.x
+                lerp_x_11 = c011 * (1 - frac.x) + c111 * frac.x
+                lerp_y_0 = lerp_x_00 * (1 - frac.y) + lerp_x_10 * frac.y
+                lerp_y_1 = lerp_x_01 * (1 - frac.y) + lerp_x_11 * frac.y
+                dist = lerp_y_0 * (1 - frac.z) + lerp_y_1 * frac.z
+                dist = dist * self.half_size * 2
+
+                # 中心差分计算法线
+                dx = (self.sdf[base + ti.Vector([1, 0, 0])] - self.sdf[base + ti.Vector([-1, 0, 0])]) 
+                dy = (self.sdf[base + ti.Vector([0, 1, 0])] - self.sdf[base + ti.Vector([0, -1, 0])]) 
+                dz = (self.sdf[base + ti.Vector([0, 0, 1])] - self.sdf[base + ti.Vector([0, -1, 1])]) 
+
+                local_normal = ti.Vector([dx, dy, dz])
+                if local_normal.norm() > 1e-8:
+                    local_normal = local_normal.normalized()
+                normal = R @ local_normal
         
         return dist, normal
 
@@ -271,3 +285,29 @@ def sphere_collision_simulation(rb1: ti.template(), rb2: ti.template(), threshol
 
             rb1.vel[None] -= impulse / m1
             rb2.vel[None] += impulse / m2
+
+@ti.kernel
+def table_constrain_function(ball: ti.template(), table_pos: ti.types.vector(3, float), table_half_extents: ti.types.vector(3, float), ball_radius: float):
+    pos = ball.pos_of_center[None]
+    vel = ball.vel[None]
+
+    # 1. 计算桌面的边界范围
+    x_min, x_max = table_pos.x - table_half_extents.x, table_pos.x + table_half_extents.x
+    y_min, y_max = table_pos.y - table_half_extents.y, table_pos.y + table_half_extents.y
+    top_surface_z = table_pos.z + table_half_extents.z
+
+    # 2. 检查球是否在桌子的水平投影范围内
+    is_over_table = (pos.x >= x_min and pos.x <= x_max and 
+                     pos.y >= y_min and pos.y <= y_max)
+
+    # 3. 如果在桌子上，且球的底部触碰到或穿透了桌面
+    if is_over_table and (pos.z - ball_radius < top_surface_z):
+        # 位置修正：强制让球停在表面
+        ball.pos_of_center[None].z = top_surface_z + ball_radius
+        
+        # 速度修正：如果球正在向下运动，消除垂直速度
+        if vel.z < 0:
+            ball.vel[None].z = 0
+            # 可选：添加一点表面摩擦
+            # ball.vel[None].x *= 0.95
+            # ball.vel[None].y *= 0.95
