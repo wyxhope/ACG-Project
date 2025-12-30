@@ -563,10 +563,10 @@ def chain_reaction_demo():
         renderer.update_fluid(p_np, name="Water", particle_radius=fluid.particle_radius)
         
         # 更新刚体
-        renderer.update_rigid_body(ball1, name="Ball_Red", material_params={'color': (0.8, 0.2, 0.2, 1.0)})
-        renderer.update_rigid_body(ball2, name="Ball_Green", material_params={'color': (0.1, 0.8, 0.1, 1.0)})
-        renderer.update_rigid_body(table, name="Table", material_params={'color': (0.2, 0.2, 0.8, 1.0)})
-        renderer.update_rigid_body(wall, name="Wall", material_params={'color': (0.7, 0.7, 0.7, 1.0), 'roughness': 0.3})
+        renderer.update_rigid_body(ball1, name="Ball_Red", material_parameters={'color': (0.7, 0.4, 0.2, 1.0),'metallic': 0.5})
+        renderer.update_rigid_body(ball2, name="Ball_Green", material_parameters={'color': (0.8, 0.1, 0.1, 1.0)})
+        renderer.update_rigid_body(table, name="Table", material_parameters={'color': (0.2, 0.2, 0.8, 1.0)})
+        renderer.update_rigid_body(wall, name="Wall", material_parameters={'color': (0.7, 0.7, 0.7, 1.0), 'roughness': 0.3})
         # renderer.update_rigid_body(duck, name="Duck")
         
         # 更新布料
