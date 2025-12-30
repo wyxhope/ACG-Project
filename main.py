@@ -463,26 +463,35 @@ def chain_reaction_demo():
     # 仿真参数
     dt = 1.0 / 30.0
     num_frames = 150 
+    gravity = ti.Vector([0.0, 0.0, -9.81])
     
     # --- 2. 初始化刚体 (球、鸭子、桌子) ---
     # 球：半径0.5，初速度向右 (+x)
-    ball = RigidBody(pos=[-0.5, 0.0, 2.5], type='sphere', mass=1.5, mesh=None, radius=0.5, 
-                     velocity=np.array([0.0, 0.0, 0.0]), color=(0.8, 0.1, 0.1, 1.0))
+    ball1 = RigidBody(pos=[-10.0, 0.0, 7.0], type='sphere', mass=3.0, mesh=None, radius=0.5, 
+                     velocity=np.array([6.5, 0.0, -3.0]), color=(0.8, 0.1, 0.1, 1.0))
+    ball2 = RigidBody(pos=[-4.0, 0.0, 5.5], type='sphere', mass=1.5, mesh=None, radius=0.6, 
+                     velocity=np.array([0.0, 0.0, -4.0]), color=(0.1, 0.8, 0.1, 1.0))
     
     # 鸭子：初始化在容器水面上方
-    obj_path = os.path.join(project_dir, "data", "Duck_1204072310_texture_obj", "Duck_1204072310_texture.obj")
-    mesh = trimesh.load(obj_path)
-    init_quat = np.array([0.7071, 0.7071, 0.0, 0.0])  # 90 degrees around x-axis
-    duck = RigidBody(pos=[0,0,2.0], type='mesh', mass=10.0, mesh=mesh, radius=0.5, rotation_quat=init_quat, scale=(0.8, 0.8, 0.8))
+    # obj_path = os.path.join(project_dir, "data", "Duck_1204072310_texture_obj", "Duck_1204072310_texture.obj")
+    # mesh = trimesh.load(obj_path)
+    # init_quat = np.array([0.7071, 0.7071, 0.0, 0.0])  # 90 degrees around x-axis
+    # duck = RigidBody(pos=[0,0,2.0], type='mesh', mass=10.0, mesh=mesh, radius=0.5, rotation_quat=init_quat, scale=(0.8, 0.8, 0.8))
 
     
     # 桌子参数 (用于物理约束判断)
-    table_pos = ti.Vector([-7.5, 0.0, 6.0])
-    table_half_extents = ti.Vector([2.5, 2.0, 0.1])
+    table_pos = [-8.5, 0.0, 4.0]
+    table_shape = [4.0, 2.0, 0.2]
+    table_half_extents = ti.Vector(table_shape) * 0.5
+    table = RigidBody(pos=table_pos, type='box', mass=1.0, mesh=None, radius=0.5, is_fixed=True, shape=table_shape)
+    wall_pos = [3.0, 0.0, 4.0]
+    wall_shape = [0.4, 8.0, 8.0]
+    wall_half_extents = ti.Vector(wall_shape) * 0.5
+    wall = RigidBody(pos=wall_pos, type='box', mass=1.0, mesh=None, radius=0.5, is_fixed=True, shape=wall_shape)
 
     # --- 3. 初始化布料 (安全网 + 背景窗帘) ---
     # A. 掉落缓冲布 (四个角固定)
-    safety_net = Cloth(N=32, pos_center=[-2.0, 0.0, 3.0], size=2, stiffness=500.0, damping=15.0, mass=2.0)
+    safety_net = Cloth(N=32, pos_center=[-4.0, 0.0, 3.0], size=4, stiffness=500.0, damping=15.0, mass=2.0)
     
     @ti.kernel
     def fix_net_corners(c: ti.template()):
@@ -492,7 +501,7 @@ def chain_reaction_demo():
     fix_net_corners(safety_net)
 
     # B. 背景窗帘 (两个，挂在两侧)
-    curtain_l = Cloth(N=65, pos_center=[-2.0, 4.0, 5.5], size=5, is_curtain=True, stiffness=250.0, damping=25.0, mass=6.0, compress_ratio=0.5)
+    curtain_l = Cloth(N=65, pos_center=[-1.0, 4.0, 5.5], size=5, is_curtain=True, stiffness=250.0, damping=25.0, mass=6.0, compress_ratio=0.5)
 
     @ti.kernel
     def fix_curtain_hooks(c: ti.template()):
@@ -507,19 +516,19 @@ def chain_reaction_demo():
     container_size = [4.0, 4.0, 3.0]
     container_pos = [-2.0, -2.0, 0.0]
     container = Container(container_pos, container_size)
-    fluid = Fluid(max_particles=500000, position=[-1.8, -1.8, 0.2], init_box=(3.6, 3.6, 1.0), particle_radius=0.03)
+    fluid = Fluid(max_particles=500000, position=[-1.8, -1.8, 0.2], init_box=(3.6, 3.6, 1.0), particle_radius=0.02)
     fluid.init_cube(spacing=2*fluid.particle_radius)
     # 流体仿真器管理球和鸭子
-    simulator = FluidSimulator(fluid, container, rigid_bodies=[duck])
+    simulator = FluidSimulator(fluid, container, rigid_bodies=[ball1, ball2], has_rigid=True)
     
 
     # --- 5. 渲染器设置 ---
     renderer = Renderer(output_dir=output_dir)
     # 视角：能看到桌子滚下到落水的全过程
-    renderer.set_camera(location=[-1.5, -16, 5], rotation_euler=[math.radians(81), 0, 0])
+    renderer.set_camera(location=[-3.0, -25, 6.5], rotation_euler=[math.radians(81), 0, 0])
     
     # 加载鸭子模型渲染
-    renderer.load_obj(obj_path, name="Duck", scale=(0.6, 0.6, 0.6))
+    # renderer.load_obj(obj_path, name="Duck", scale=(0.6, 0.6, 0.6))
     renderer.add_static_mesh(container.mesh, name="GlassContainer", material_names="Glass")
     renderer.objects["GlassContainer"].hide_render = True 
     renderer.objects["GlassContainer"].hide_viewport = True
@@ -532,25 +541,33 @@ def chain_reaction_demo():
     for frame in range(num_frames):
         # 1. 刚体-布料交互 (球与安全网)
         t = frame * dt
-        safety_net.step(dt, substeps=5000)
+        safety_net.step(dt, substeps=5000, rigid_bodies=[ball1, ball2])
         
         # 2. 窗帘自更新 (简单摆动)
         curtain_l.step(dt, substeps=8000, wind_t=t)
         
         # 3. 流体-刚体交互 (水与球、鸭子)
-        simulator.step(dt) 
+        
         
         # 4. 桌子约束逻辑 (球在桌面上滚动)
-        # table_constrain_function(ball, table_pos, table_half_extents, ball.radius)
-        
+        table_constrain_function(ball1, table_pos, table_half_extents, ball1.radius, elasticity=0.5)
+        wall_constrain_function(ball1, wall_pos, wall_half_extents, ball1.radius, elasticity=0.5)
+        wall_constrain_function(ball2, wall_pos, wall_half_extents, ball2.radius, elasticity=0.5)
+        sphere_collision_simulation(ball1, ball2, 1e-3, 0.5)
+        simulator.step(dt) 
+
+
         # --- 渲染数据传输 ---
         # 更新流体
         p_np = fluid.pos.to_numpy()[:fluid.num_particles[None]]
         renderer.update_fluid(p_np, name="Water", particle_radius=fluid.particle_radius)
         
         # 更新刚体
-        renderer.update_rigid_body(ball, name="Ball_Red")
-        renderer.update_rigid_body(duck, name="Duck")
+        renderer.update_rigid_body(ball1, name="Ball_Red", material_params={'color': (0.8, 0.2, 0.2, 1.0)})
+        renderer.update_rigid_body(ball2, name="Ball_Green", material_params={'color': (0.1, 0.8, 0.1, 1.0)})
+        renderer.update_rigid_body(table, name="Table", material_params={'color': (0.2, 0.2, 0.8, 1.0)})
+        renderer.update_rigid_body(wall, name="Wall", material_params={'color': (0.7, 0.7, 0.7, 1.0), 'roughness': 0.3})
+        # renderer.update_rigid_body(duck, name="Duck")
         
         # 更新布料
         renderer.update_cloth(safety_net, name="Net_Buffer", material_params={'color': (0.2, 0.8, 0.2, 1.0)})
@@ -569,11 +586,14 @@ def chain_reaction_demo():
 
     print(f"Simulation finished. Images saved in: {output_dir}")
 
+    video_path = "output/video/c.mp4"
+    make_video(output_dir, video_path)
+    print(f"Video saved to {video_path}")
 
 def main():
     chain_reaction_demo()
 
-
+    
 
 if __name__ == "__main__":
     main()

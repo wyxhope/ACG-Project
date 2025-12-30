@@ -152,7 +152,7 @@ class Cloth:
             dist, normal = rb.get_sdf(pos)
             
             # 2. 简单的碰撞阈值 (稍微留一点厚度)
-            thickness = 0.1
+            thickness = 0.2
             
             if dist < thickness:
                 # 穿透深度
@@ -196,8 +196,8 @@ class Cloth:
                 self.apply_wind(wind_t)
             self.update(dt)
             if rigid_bodies:
-                # 假设只处理第一个刚体
-                self.solve_rigid_collision(rigid_bodies[0])
+                for rb in ti.static(rigid_bodies):
+                    self.solve_rigid_collision(rb)
 
     def get_indices(self):
         """生成三角形拓扑结构 (用于Blender渲染)"""
