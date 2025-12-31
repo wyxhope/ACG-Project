@@ -12,7 +12,8 @@ class RigidBody:
                  rotation_quat=np.array([1.0, 0.0, 0.0, 0.0]),
                  scale=(1.0, 1.0, 1.0),
                  is_fixed=False,
-                 mass_distribution='uniform'):
+                 mass_distribution='uniform',
+                 shape=[]):
         self.pos_of_center = ti.Vector.field(3, dtype=float, shape=()) 
         self.pos_of_center[None] = ti.Vector(pos)
 
@@ -32,6 +33,8 @@ class RigidBody:
 
         if type == 'sphere':
             self.mesh = trimesh.creation.icosphere(subdivisions=5, radius=radius)
+        elif type == 'box':
+            self.mesh = trimesh.creation.box(extents=(shape[0], shape[1], shape[2]))
         else:
             if mesh is not None:
                 self.mesh = mesh
@@ -287,7 +290,7 @@ def sphere_collision_simulation(rb1: ti.template(), rb2: ti.template(), threshol
             rb2.vel[None] += impulse / m2
 
 @ti.kernel
-def table_constrain_function(ball: ti.template(), table_pos: ti.types.vector(3, float), table_half_extents: ti.types.vector(3, float), ball_radius: float):
+def table_constrain_function(ball: ti.template(), table_pos: ti.types.vector(3, float), table_half_extents: ti.types.vector(3, float), ball_radius: float, elasticity: float):
     pos = ball.pos_of_center[None]
     vel = ball.vel[None]
 
@@ -301,13 +304,38 @@ def table_constrain_function(ball: ti.template(), table_pos: ti.types.vector(3, 
                      pos.y >= y_min and pos.y <= y_max)
 
     # 3. 如果在桌子上，且球的底部触碰到或穿透了桌面
-    if is_over_table and (pos.z - ball_radius < top_surface_z):
+    if is_over_table and (pos.z - ball_radius < top_surface_z) and (pos.z - ball_radius > top_surface_z - 0.5):
         # 位置修正：强制让球停在表面
         ball.pos_of_center[None].z = top_surface_z + ball_radius
         
         # 速度修正：如果球正在向下运动，消除垂直速度
         if vel.z < 0:
-            ball.vel[None].z = 0
+            ball.vel[None].z = - vel.z * elasticity  # 简单反弹，并损失部分能量
+            # 可选：添加一点表面摩擦
+            # ball.vel[None].x *= 0.95
+            # ball.vel[None].y *= 0.95
+@ti.kernel
+def wall_constrain_function(ball: ti.template(), table_pos: ti.types.vector(3, float), table_half_extents: ti.types.vector(3, float), ball_radius: float, elasticity: float):
+    pos = ball.pos_of_center[None]
+    vel = ball.vel[None]
+
+    # 1. 计算桌面的边界范围
+    x_min, x_max = table_pos.x - table_half_extents.x, table_pos.x + table_half_extents.x
+    y_min, y_max = table_pos.y - table_half_extents.y, table_pos.y + table_half_extents.y
+    z_min, z_max = table_pos.z - table_half_extents.z, table_pos.z + table_half_extents.z
+
+    # 2. 检查球是否在桌子的水平投影范围内
+    is_over_table = (pos.y >= y_min and pos.y <= y_max and
+                     pos.z >= z_min and pos.z <= z_max)
+
+    # 3. 如果在桌子上，且球的底部触碰到或穿透了桌面
+    if is_over_table and (pos.x + ball_radius > x_min):
+        # 位置修正：强制让球停在表面
+        ball.pos_of_center[None].x = x_min - ball_radius
+        
+        # 速度修正：如果球正在向下运动，消除垂直速度
+        if vel.x > 0:
+            ball.vel[None].x = - vel.x * elasticity  # 简单反弹，并损失部分能量
             # 可选：添加一点表面摩擦
             # ball.vel[None].x *= 0.95
             # ball.vel[None].y *= 0.95
