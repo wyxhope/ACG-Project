@@ -96,12 +96,9 @@ class FluidSimulator:
             self.fluid.compute_forces()
 
             if self.has_rigid:
-                for rb in ti.static(self.rigid_bodies):
-                    gravity_force = ti.Vector([0.0, 0.0, -9.81]) * rb.mass
-                    rb.apply_force(gravity_force, sub_dt)
                 self.solve_rigid_interaction(sub_dt)
             self.fluid.integrate(sub_dt)
             self.container.enforce_boundary(self.fluid)
-            if self.has_rigid:
-                for rb in ti.static(self.rigid_bodies):
-                    rb.update(sub_dt)
+            # if self.has_rigid:
+            #     for rb in ti.static(self.rigid_bodies):
+            #         rb.update(sub_dt)

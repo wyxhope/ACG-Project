@@ -467,26 +467,16 @@ def chain_reaction_demo():
     
     # --- 2. 初始化刚体 (球、鸭子、桌子) ---
     # 球：半径0.5，初速度向右 (+x)
-    ball1 = RigidBody(pos=[-10.0, 0.0, 7.0], type='sphere', mass=3.0, mesh=None, radius=0.5, 
+    ball1 = RigidBody(pos=[-10.0, 0.0, 7.0], type='sphere', mass=3.0, radius=0.5, 
                      velocity=np.array([6.5, 0.0, -3.0]), color=(0.8, 0.1, 0.1, 1.0))
-    ball2 = RigidBody(pos=[-4.0, 0.0, 5.5], type='sphere', mass=1.5, mesh=None, radius=0.6, 
+    ball2 = RigidBody(pos=[-4.0, 0.0, 5.5], type='sphere', mass=1.5, radius=0.6, 
                      velocity=np.array([0.0, 0.0, -4.0]), color=(0.1, 0.8, 0.1, 1.0))
     
-    # 鸭子：初始化在容器水面上方
-    # obj_path = os.path.join(project_dir, "data", "Duck_1204072310_texture_obj", "Duck_1204072310_texture.obj")
-    # mesh = trimesh.load(obj_path)
-    # init_quat = np.array([0.7071, 0.7071, 0.0, 0.0])  # 90 degrees around x-axis
-    # duck = RigidBody(pos=[0,0,2.0], type='mesh', mass=10.0, mesh=mesh, radius=0.5, rotation_quat=init_quat, scale=(0.8, 0.8, 0.8))
-
-    
-    # 桌子参数 (用于物理约束判断)
     table_pos = [-8.5, 0.0, 4.0]
     table_shape = [4.0, 2.0, 0.2]
-    table_half_extents = ti.Vector(table_shape) * 0.5
     table = RigidBody(pos=table_pos, type='box', mass=1.0, mesh=None, radius=0.5, is_fixed=True, shape=table_shape)
     wall_pos = [3.0, 0.0, 4.0]
     wall_shape = [0.4, 8.0, 8.0]
-    wall_half_extents = ti.Vector(wall_shape) * 0.5
     wall = RigidBody(pos=wall_pos, type='box', mass=1.0, mesh=None, radius=0.5, is_fixed=True, shape=wall_shape)
 
     # --- 3. 初始化布料 (安全网 + 背景窗帘) ---
@@ -550,11 +540,16 @@ def chain_reaction_demo():
         
         
         # 4. 桌子约束逻辑 (球在桌面上滚动)
-        table_constrain_function(ball1, table_pos, table_half_extents, ball1.radius, elasticity=0.5)
-        wall_constrain_function(ball1, wall_pos, wall_half_extents, ball1.radius, elasticity=0.5)
-        wall_constrain_function(ball2, wall_pos, wall_half_extents, ball2.radius, elasticity=0.5)
-        sphere_collision_simulation(ball1, ball2, 1e-3, 0.5)
+        sphere_box_collision_simulation(ball1, table, 1e-3)
+        sphere_box_collision_simulation(ball2, table, 1e-3)
+        sphere_box_collision_simulation(ball1, wall, 1e-3)
+
+        sphere_collision_simulation(ball1, ball2, 1e-3)
         simulator.step(dt) 
+        ball1.apply_force(gravity * ball1.mass, dt)
+        ball2.apply_force(gravity * ball2.mass, dt)
+        ball1.update(dt)
+        ball2.update(dt)
 
 
         # --- 渲染数据传输 ---
@@ -567,7 +562,6 @@ def chain_reaction_demo():
         renderer.update_rigid_body(ball2, name="Ball_Green", material_parameters={'color': (0.8, 0.1, 0.1, 1.0)})
         renderer.update_rigid_body(table, name="Table", material_parameters={'color': (0.2, 0.2, 0.8, 1.0)})
         renderer.update_rigid_body(wall, name="Wall", material_parameters={'color': (0.7, 0.7, 0.7, 1.0), 'roughness': 0.3})
-        # renderer.update_rigid_body(duck, name="Duck")
         
         # 更新布料
         renderer.update_cloth(safety_net, name="Net_Buffer", material_params={'color': (0.2, 0.8, 0.2, 1.0)})
@@ -586,7 +580,7 @@ def chain_reaction_demo():
 
     print(f"Simulation finished. Images saved in: {output_dir}")
 
-    video_path = "output/video/c.mp4"
+    video_path = "output/video/chain.mp4"
     make_video(output_dir, video_path)
     print(f"Video saved to {video_path}")
 

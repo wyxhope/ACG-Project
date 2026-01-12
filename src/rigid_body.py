@@ -6,18 +6,21 @@ from mesh_to_sdf import mesh_to_voxels
 
 @ti.data_oriented
 class RigidBody:
-    def __init__(self, pos, type: str, mass, mesh, color=(0.8, 0.8, 0.8, 1.0), radius=1.0,
+    def __init__(self, pos, type: str, mass, mesh = None, color=(0.8, 0.8, 0.8, 1.0), radius=1.0,
                  velocity=np.zeros(3),
                  angular_velocity=np.zeros(3),
                  rotation_quat=np.array([1.0, 0.0, 0.0, 0.0]),
                  scale=(1.0, 1.0, 1.0),
                  is_fixed=False,
                  mass_distribution='uniform',
-                 shape=[]):
+                 shape=[],
+                 restitution=0.5):
         self.pos_of_center = ti.Vector.field(3, dtype=float, shape=()) 
         self.pos_of_center[None] = ti.Vector(pos)
 
         self.mass = mass
+        if is_fixed:
+            self.mass = 1e8
 
         self.vel = ti.Vector.field(3, dtype=float, shape=())
         self.vel[None] = ti.Vector(velocity)
@@ -30,6 +33,8 @@ class RigidBody:
         self.is_fixed = is_fixed
 
         self.type = type
+        self.shape = shape
+        self.restitution = restitution
 
         if type == 'sphere':
             self.mesh = trimesh.creation.icosphere(subdivisions=5, radius=radius)
@@ -220,13 +225,14 @@ class RigidBody:
         return has_collision, closest_normal
     
     @ti.kernel
-    def apply_force(self, force: ti.types.vector(3, float), dt: float):
+    def apply_force(self, force: ti.math.vec3, dt: float):
         # F = ma => a = F / m
         # v_new = v_old + a * dt
-        acceleration = force / self.mass
-        self.vel[None] += acceleration * dt
+        if not self.is_fixed:
+            acceleration = force / self.mass
+            self.vel[None] += acceleration * dt
     @ti.kernel
-    def apply_torque(self, torque: ti.types.vector(3, float), dt: float):
+    def apply_torque(self, torque: ti.math.vec3, dt: float):
         # tau = I * alpha => alpha = I_inv * tau
         # ang_v_new = ang_v_old + alpha * dt
         R = self.quat_to_matrix(self.quat[None])
@@ -267,9 +273,11 @@ class RigidBody:
                 self.quat[None] = q / norm_q
 
 @ti.kernel
-def sphere_collision_simulation(rb1: ti.template(), rb2: ti.template(), threshold: float, restitution: float):
+def sphere_collision_simulation(rb1: ti.template(), rb2: ti.template(), threshold: float):
     p1, p2 = rb1.pos_of_center[None], rb2.pos_of_center[None]
     v1, v2 = rb1.vel[None], rb2.vel[None]
+
+    restitution = min(rb1.restitution, rb2.restitution)
 
     m1, m2 = rb1.mass, rb2.mass
     r1, r2 = rb1.radius, rb2.radius
@@ -290,52 +298,164 @@ def sphere_collision_simulation(rb1: ti.template(), rb2: ti.template(), threshol
             rb2.vel[None] += impulse / m2
 
 @ti.kernel
-def table_constrain_function(ball: ti.template(), table_pos: ti.types.vector(3, float), table_half_extents: ti.types.vector(3, float), ball_radius: float, elasticity: float):
-    pos = ball.pos_of_center[None]
-    vel = ball.vel[None]
+def sphere_box_collision_simulation(ball: ti.template(), box: ti.template(), threshold: float):
+    ball_pos = ball.pos_of_center[None]
+    box_pos = box.pos_of_center[None]
+    
+    R_box = box.quat_to_matrix(box.quat[None])
+    R_inv_box = R_box.transpose()
+    ball_pos_local = R_inv_box @ (ball_pos - box_pos)
 
-    # 1. 计算桌面的边界范围
-    x_min, x_max = table_pos.x - table_half_extents.x, table_pos.x + table_half_extents.x
-    y_min, y_max = table_pos.y - table_half_extents.y, table_pos.y + table_half_extents.y
-    top_surface_z = table_pos.z + table_half_extents.z
+    box_half_extents = ti.Vector([box.shape[0] * 0.5, box.shape[1] * 0.5, box.shape[2] * 0.5])
+    closest_point_local = ti.Vector([
+        ti.max(-box_half_extents.x, ti.min(ball_pos_local.x, box_half_extents.x)),
+        ti.max(-box_half_extents.y, ti.min(ball_pos_local.y, box_half_extents.y)),
+        ti.max(-box_half_extents.z, ti.min(ball_pos_local.z, box_half_extents.z))
+    ])
 
-    # 2. 检查球是否在桌子的水平投影范围内
-    is_over_table = (pos.x >= x_min and pos.x <= x_max and 
-                     pos.y >= y_min and pos.y <= y_max)
+    closest_point_world = R_box @ closest_point_local + box_pos
+    
+    restitution = min(ball.restitution, box.restitution)
 
-    # 3. 如果在桌子上，且球的底部触碰到或穿透了桌面
-    if is_over_table and (pos.z - ball_radius < top_surface_z) and (pos.z - ball_radius > top_surface_z - 0.5):
-        # 位置修正：强制让球停在表面
-        ball.pos_of_center[None].z = top_surface_z + ball_radius
+    diff = ball_pos - closest_point_world
+    dist = diff.norm()
+
+    mb = ball.mass
+    mbx = box.mass
+    
+    if dist < ball.radius + threshold:
+        normal = diff.normalized()
+        if dist < 1e-6:
+            normal = R_box @ ti.Vector([0.0, 0.0, 1.0])
+
+        r_box = closest_point_world - box.pos_of_center[None]
+        v_rel = ball.vel[None] - (box.vel[None] + box.ang_vel[None].cross(r_box))
         
-        # 速度修正：如果球正在向下运动，消除垂直速度
-        if vel.z < 0:
-            ball.vel[None].z = - vel.z * elasticity  # 简单反弹，并损失部分能量
-            # 可选：添加一点表面摩擦
-            # ball.vel[None].x *= 0.95
-            # ball.vel[None].y *= 0.95
+        vel_along_normal = v_rel.dot(normal)
+
+        if vel_along_normal < 0:
+
+            I_inv_box = box.I_inv[None]
+            rot_inertia_box = (I_inv_box @ r_box.cross(normal)).cross(r_box).dot(normal)
+            
+            inv_mass_sum = 1 / mb + 1 / mbx + rot_inertia_box
+            
+            impulse_magnitude = -(1 + restitution) * vel_along_normal / inv_mass_sum
+            impulse = impulse_magnitude * normal
+            ball.vel[None] += impulse / mb
+            box.vel[None] -= impulse / mbx
+
+            box.ang_vel[None] -= I_inv_box @ r_box.cross(impulse) 
+
+            
+@ti.func
+def check_vertex_penetration(p, box, threshold):
+    # Transform point p to box's local space
+    R_inv = box.quat_to_matrix(box.quat[None]).transpose()
+    
+    p_local = R_inv @ (p - box.pos_of_center[None])
+
+        # Check for penetration along each axis of the box
+    half_extents = ti.Vector([box.shape[0] * 0.5, box.shape[1] * 0.5, box.shape[2] * 0.5])
+    penetration_depth = 0.0
+    normal = ti.Vector([0.0, 0.0, 0.0])
+    is_penetrating = (ti.abs(p_local.x) < half_extents.x + threshold and
+                          ti.abs(p_local.y) < half_extents.y + threshold and
+                          ti.abs(p_local.z) < half_extents.z + threshold)
+
+    if is_penetrating:
+            # Find axis of minimum penetration
+        min_penetration = 1e9
+            
+        for i in ti.static(range(3)):
+            dist_to_face = half_extents[i] - ti.abs(p_local[i])
+            if dist_to_face < min_penetration:
+                min_penetration = dist_to_face
+                # Normal points outwards from the box face
+                axis = ti.Vector.zero(float, 3)
+                axis[i] = 1.0 if p_local[i] > 0 else -1.0
+                    # Transform normal to world space
+                normal = box.quat_to_matrix(box.quat[None]) @ axis
+            
+        penetration_depth = min_penetration
+            
+    return penetration_depth, normal, is_penetrating
+
 @ti.kernel
-def wall_constrain_function(ball: ti.template(), table_pos: ti.types.vector(3, float), table_half_extents: ti.types.vector(3, float), ball_radius: float, elasticity: float):
-    pos = ball.pos_of_center[None]
-    vel = ball.vel[None]
+def box_collision_simulation(box1: ti.template(), box2: ti.template(), threshold: float):
+    # Vertex-based penetration check
+    pos1, pos2 = box1.pos_of_center[None], box2.pos_of_center[None]
+    R1, R2 = box1.quat_to_matrix(box1.quat[None]), box2.quat_to_matrix(box2.quat[None])
+    half1 = ti.Vector([box1.shape[0] * 0.5, box1.shape[1] * 0.5, box1.shape[2] * 0.5])
+    half2 = ti.Vector([box2.shape[0] * 0.5, box2.shape[1] * 0.5, box2.shape[2] * 0.5])
 
-    # 1. 计算桌面的边界范围
-    x_min, x_max = table_pos.x - table_half_extents.x, table_pos.x + table_half_extents.x
-    y_min, y_max = table_pos.y - table_half_extents.y, table_pos.y + table_half_extents.y
-    z_min, z_max = table_pos.z - table_half_extents.z, table_pos.z + table_half_extents.z
+    avg_normal = ti.Vector([0.0, 0.0, 0.0])
+    avg_contact_point = ti.Vector([0.0, 0.0, 0.0])
+    num_contacts = 0
 
-    # 2. 检查球是否在桌子的水平投影范围内
-    is_over_table = (pos.y >= y_min and pos.y <= y_max and
-                     pos.z >= z_min and pos.z <= z_max)
+    # Check vertices of box2 against box1
+    for i in ti.static(range(8)):
+        offset = ti.Vector([
+            half2.x * (1 if (i & 1) else -1),
+            half2.y * (1 if (i & 2) else -1),
+            half2.z * (1 if (i & 4) else -1)
+        ])
+        vertex = pos2 + R2 @ offset
+        depth, normal, is_penetrating = check_vertex_penetration(vertex, box1, threshold)
+        if is_penetrating:
+            avg_normal += normal
+            avg_contact_point += vertex - normal * (depth * 0.5)
+            num_contacts += 1
 
-    # 3. 如果在桌子上，且球的底部触碰到或穿透了桌面
-    if is_over_table and (pos.x + ball_radius > x_min):
-        # 位置修正：强制让球停在表面
-        ball.pos_of_center[None].x = x_min - ball_radius
+    # Check vertices of box1 against box2
+    for i in ti.static(range(8)):
+        offset = ti.Vector([
+            half1.x * (1 if (i & 1) else -1),
+            half1.y * (1 if (i & 2) else -1),
+            half1.z * (1 if (i & 4) else -1)
+        ])
+        vertex = pos1 + R1 @ offset
+        depth, normal, is_penetrating = check_vertex_penetration(vertex, box2, threshold)
+        if is_penetrating:
+            avg_normal -= normal # Normal should point from box1 to box2
+            avg_contact_point += vertex - normal * (depth * 0.5)
+            num_contacts += 1
+
+    if num_contacts > 0:
+        # Average the normals and contact points
+        collision_normal = (avg_normal / num_contacts).normalized()
+        contact_point = avg_contact_point / num_contacts
+
+        # --- Penetration Resolution (simplified) ---
+        # A more robust method would be needed for complex multi-contact scenarios
         
-        # 速度修正：如果球正在向下运动，消除垂直速度
-        if vel.x > 0:
-            ball.vel[None].x = - vel.x * elasticity  # 简单反弹，并损失部分能量
-            # 可选：添加一点表面摩擦
-            # ball.vel[None].x *= 0.95
-            # ball.vel[None].y *= 0.95
+        # --- Collision Response ---
+        r1 = contact_point - pos1
+        r2 = contact_point - pos2
+        
+        v_rel = (box2.vel[None] + box2.ang_vel[None].cross(r2)) - \
+                (box1.vel[None] + box1.ang_vel[None].cross(r1))
+        
+        vel_along_normal = v_rel.dot(collision_normal)
+
+        if vel_along_normal < 0:
+            restitution = min(box1.restitution, box2.restitution)
+            m1, m2 = box1.mass, box2.mass
+            I_inv1, I_inv2 = box1.I_inv[None], box2.I_inv[None]
+
+            rot_inertia1 = (I_inv1 @ r1.cross(collision_normal)).cross(r1).dot(collision_normal)
+            rot_inertia2 = (I_inv2 @ r2.cross(collision_normal)).cross(r2).dot(collision_normal)
+            inv_mass_sum = 1/m1 + 1/m2 + rot_inertia1 + rot_inertia2
+
+            if inv_mass_sum > 0:
+                impulse_magnitude = -(1 + restitution) * vel_along_normal / inv_mass_sum
+                impulse = impulse_magnitude * collision_normal
+
+                if not box1.is_fixed:
+                    box1.vel[None] -= impulse / m1
+                    box1.ang_vel[None] -= I_inv1 @ r1.cross(impulse)
+                if not box2.is_fixed:
+                    box2.vel[None] += impulse / m2
+                    box2.ang_vel[None] += I_inv2 @ r2.cross(impulse)
+
+    

@@ -217,7 +217,7 @@ import math
 @ti.data_oriented
 class Fluid:
     def __init__(self, max_particles, position=[0.0, 0.0, 0.0], init_box=(10.0, 10.0, 5.0),
-                 viscosity=10.0, rest_density=1000.0, gamma=7.0, sound_speed=20.0, particle_radius=0.01):
+                 viscosity=10.0, rest_density=1000.0, gamma=7.0, sound_speed=20.0, particle_radius=0.01, gravity=ti.Vector([0.0, 0.0, -9.8])):
         
         self.max_particles = max_particles
         self.num_particles = ti.field(dtype=int, shape=())
@@ -238,7 +238,7 @@ class Fluid:
         
         self.rest_density = rest_density
         self.viscosity = viscosity
-        self.gravity = ti.Vector([0.0, 0.0, -9.8])
+        self.gravity = gravity
         
 
         self.gamma = gamma
