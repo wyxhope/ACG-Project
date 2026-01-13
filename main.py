@@ -543,13 +543,10 @@ def chain_reaction_demo():
         sphere_box_collision_simulation(ball1, table, 1e-3)
         sphere_box_collision_simulation(ball2, table, 1e-3)
         sphere_box_collision_simulation(ball1, wall, 1e-3)
+        sphere_box_collision_simulation(ball2, wall, 1e-3)
 
         sphere_collision_simulation(ball1, ball2, 1e-3)
         simulator.step(dt) 
-        ball1.apply_force(gravity * ball1.mass, dt)
-        ball2.apply_force(gravity * ball2.mass, dt)
-        ball1.update(dt)
-        ball2.update(dt)
 
 
         # --- 渲染数据传输 ---

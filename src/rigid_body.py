@@ -109,6 +109,44 @@ class RigidBody:
                 normal = p_rel / d_norm
             else:
                 normal = ti.Vector([0.0, 0.0, 1.0])
+        elif ti.static(self.type == 'box'):
+            # --- 旋转盒子解析解 ---
+            center = self.pos_of_center[None]
+            R = self.quat_to_matrix(self.quat[None])
+            # World to Local
+            p_local = R.transpose() @ (world_pos - center)
+            
+            extents = ti.Vector([self.shape[0]*0.5, self.shape[1]*0.5, self.shape[2]*0.5])
+            d_vec = ti.abs(p_local) - extents
+
+            # SDF Distance
+            inside_dist = ti.min(ti.max(d_vec.x, ti.max(d_vec.y, d_vec.z)), 0.0)
+            outside_vec = ti.max(d_vec, 0.0)
+            outside_dist = outside_vec.norm()
+            dist = outside_dist + inside_dist
+            
+            # Normal calculation
+            normal_local = ti.Vector([0.0, 0.0, 0.0])
+            
+            if dist > 0:
+                # Outside the box
+                if outside_dist > 1e-8:
+                     normal_local = (outside_vec / outside_dist) * \
+                        ti.Vector([1.0 if p_local.x >= 0 else -1.0, 
+                                   1.0 if p_local.y >= 0 else -1.0, 
+                                   1.0 if p_local.z >= 0 else -1.0])
+                else:
+                     normal_local = ti.Vector([0.0, 0.0, 1.0]) # Fallback
+            else:
+                # Inside the box
+                if d_vec.x > d_vec.y and d_vec.x > d_vec.z:
+                    normal_local = ti.Vector([1.0 if p_local.x > 0 else -1.0, 0.0, 0.0])
+                elif d_vec.y > d_vec.z:
+                    normal_local = ti.Vector([0.0, 1.0 if p_local.y > 0 else -1.0, 0.0])
+                else:
+                    normal_local = ti.Vector([0.0, 0.0, 1.0 if p_local.z > 0 else -1.0])
+            
+            normal = R @ normal_local
         else:
             # --- 原有的通用网格 SDF 查询逻辑 ---
             center = self.pos_of_center[None]

@@ -1,5 +1,6 @@
 import taichi as ti
 import numpy as np
+import time
 
 @ti.data_oriented
 class Cloth:
@@ -138,7 +139,7 @@ class Cloth:
                 self.vel[i, j] = ti.Vector([0.0, 0.0, 0.0])
                 
     @ti.kernel
-    def solve_rigid_collision(self, rb: ti.template()):
+    def solve_rigid_collision(self, rb: ti.template(), thickness: float):
         """
         利用 RigidBody 的 SDF 进行碰撞解算
         """
@@ -150,9 +151,6 @@ class Cloth:
             
             # 1. 查询 SDF
             dist, normal = rb.get_sdf(pos)
-            
-            # 2. 简单的碰撞阈值 (稍微留一点厚度)
-            thickness = 0.05
             
             if dist < thickness:
                 # 穿透深度
@@ -186,18 +184,41 @@ class Cloth:
                     ti.atomic_add(rb.vel[None], -impulse * normal / rb.mass)
 
 
-    def step(self, dt, rigid_bodies=None, substeps=100, wind_t=None):
+    def step(self, dt, rigid_bodies=None, substeps=100, wind_t=None, gravity=ti.Vector([0.0, 0.0, -9.8]), thickness=0.05):
+        """执行多子步模拟"""
         dt /= substeps
-        gravity = ti.Vector([0.0, 0.0, -9.8])
         
+        t_forces = 0.0
+        t_collision = 0.0
+        t_update = 0.0
+        
+        if not hasattr(self, 'breakdown_timers'):
+            self.breakdown_timers = {'forces': 0.0, 'collision': 0.0, 'update': 0.0, 'total_steps': 0}
+            
         for _ in range(substeps):
+            t0 = time.time()
             self.compute_forces(gravity)
             if wind_t is not None:
                 self.apply_wind(wind_t)
-            self.update(dt)
+            t1 = time.time()
+            t_forces += (t1 - t0)
+            
+            t0 = time.time()
             if rigid_bodies:
-                for rb in ti.static(rigid_bodies):
-                    self.solve_rigid_collision(rb)
+                for rb in rigid_bodies:
+                    self.solve_rigid_collision(rb, thickness)
+            t1 = time.time()
+            t_collision += (t1 - t0)
+            
+            t0 = time.time()
+            self.update(dt)
+            t1 = time.time()
+            t_update += (t1 - t0)
+            
+        self.breakdown_timers['forces'] += t_forces
+        self.breakdown_timers['collision'] += t_collision
+        self.breakdown_timers['update'] += t_update
+        self.breakdown_timers['total_steps'] += substeps
 
     def get_indices(self):
         """生成三角形拓扑结构 (用于Blender渲染)"""
