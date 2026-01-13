@@ -454,11 +454,11 @@ def curtain_simulation():
 
 def chain_reaction_demo():
     # --- 1. 初始化 Taichi ---
-    # ti.init(arch=ti.gpu)
+    ti.init(arch=ti.gpu)
     
 
     output_dir = os.path.join(project_dir, "output", "chain_reaction")
-    # if not os.path.exists(output_dir): os.makedirs(output_dir)
+    if not os.path.exists(output_dir): os.makedirs(output_dir)
 
     # 仿真参数
     dt = 1.0 / 30.0
@@ -493,23 +493,23 @@ def chain_reaction_demo():
     # A. 掉落缓冲布 (四个角固定)
     safety_net = Cloth(N=32, pos_center=[-4.0, 0.0, 3.0], size=4, stiffness=500.0, damping=15.0, mass=2.0)
     
-    # @ti.kernel
-    # def fix_net_corners(c: ti.template()):
-    #     for i, j in c.is_fixed:
-    #         if (i == 0 or i == c.N-1) and (j == 0 or j == c.N-1):
-    #             c.is_fixed[i, j] = 1
-    # fix_net_corners(safety_net)
+    @ti.kernel
+    def fix_net_corners(c: ti.template()):
+        for i, j in c.is_fixed:
+            if (i == 0 or i == c.N-1) and (j == 0 or j == c.N-1):
+                c.is_fixed[i, j] = 1
+    fix_net_corners(safety_net)
 
     # B. 背景窗帘 (两个，挂在两侧)
     curtain_l = Cloth(N=65, pos_center=[-1.0, 4.0, 5.5], size=5, is_curtain=True, stiffness=250.0, damping=25.0, mass=6.0, compress_ratio=0.5)
 
-    # @ti.kernel
-    # def fix_curtain_hooks(c: ti.template()):
-    #     for i in range(c.N):
-    #         if i % 8 == 0:
-    #             c.is_fixed[i, c.N - 1] = 1
+    @ti.kernel
+    def fix_curtain_hooks(c: ti.template()):
+        for i in range(c.N):
+            if i % 8 == 0:
+                c.is_fixed[i, c.N - 1] = 1
     
-    # fix_curtain_hooks(curtain_l)
+    fix_curtain_hooks(curtain_l)
 
     # --- 4. 初始化流体与容器 ---
     # 容器位置 (-2,-2,0), 大小 4*4*4
@@ -543,8 +543,8 @@ def chain_reaction_demo():
         t = frame * dt
         safety_net.step(dt, substeps=5000, rigid_bodies=[ball1, ball2])
         
-    #     # 2. 窗帘自更新 (简单摆动)
-    #     curtain_l.step(dt, substeps=8000, wind_t=t)
+        # 2. 窗帘自更新 (简单摆动)
+        curtain_l.step(dt, substeps=8000, wind_t=t)
         
         # 3. 流体-刚体交互 (水与球、鸭子)
         
@@ -569,22 +569,22 @@ def chain_reaction_demo():
         renderer.update_rigid_body(wall, name="Wall", material_parameters={'color': (0.7, 0.7, 0.7, 1.0), 'roughness': 0.3})
         # renderer.update_rigid_body(duck, name="Duck")
         
-    #     # 更新布料
-    #     renderer.update_cloth(safety_net, name="Net_Buffer", material_params={'color': (0.2, 0.8, 0.2, 1.0)})
-    #     renderer.update_cloth(curtain_l, name="Curtain_Left", material_params={
-    #         'color': (0.1, 0.3, 0.7, 1.0), 
-    #         'roughness': 0.4,
-    #         'metallic': 0.1
-    #     })
+        # 更新布料
+        renderer.update_cloth(safety_net, name="Net_Buffer", material_params={'color': (0.2, 0.8, 0.2, 1.0)})
+        renderer.update_cloth(curtain_l, name="Curtain_Left", material_params={
+            'color': (0.1, 0.3, 0.7, 1.0), 
+            'roughness': 0.4,
+            'metallic': 0.1
+        })
         
-    #     # 渲染输出
-    #     renderer.render_frame(frame)
-    #     print(f"Frame {frame}/{num_frames} is rendered.")
-    #     debug_blend_path = os.path.join(output_dir, "debug_online_scene.blend")
-    #     renderer.save_blend(debug_blend_path)
-    #     print(f"Debug scene saved to: {debug_blend_path}")
+        # 渲染输出
+        renderer.render_frame(frame)
+        print(f"Frame {frame}/{num_frames} is rendered.")
+        debug_blend_path = os.path.join(output_dir, "debug_online_scene.blend")
+        renderer.save_blend(debug_blend_path)
+        print(f"Debug scene saved to: {debug_blend_path}")
 
-    # print(f"Simulation finished. Images saved in: {output_dir}")
+    print(f"Simulation finished. Images saved in: {output_dir}")
 
     video_path = "output/video/c.mp4"
     make_video(output_dir, video_path)
