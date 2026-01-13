@@ -1,11 +1,25 @@
+import sys 
+import os
+import site
+import math
+user_site_packages = site.getusersitepackages()
+if user_site_packages not in sys.path:
+    sys.path.append(user_site_packages)
+
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
 import taichi as ti
 import numpy as np
 from src.rigid_body import RigidBody
 
-ti.init(arch=ti.gpu)
+
 
 def run_simple_render():
     # 1. 创建窗口
+    ti.init(arch=ti.gpu)
+
     res = (1024, 1024)
     window = ti.ui.Window("Rigid Body Render Test", res)
     canvas = window.get_canvas()
