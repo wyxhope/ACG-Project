@@ -152,7 +152,7 @@ class Cloth:
             dist, normal = rb.get_sdf(pos)
             
             # 2. 简单的碰撞阈值 (稍微留一点厚度)
-            thickness = 0.2
+            thickness = 0.05
             
             if dist < thickness:
                 # 穿透深度
