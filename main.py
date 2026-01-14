@@ -509,7 +509,7 @@ def chain_reaction_demo():
     fluid = Fluid(max_particles=500000, position=[-1.8, -1.8, 0.2], init_box=(3.6, 3.6, 1.0), particle_radius=0.02)
     fluid.init_cube(spacing=2*fluid.particle_radius)
     # 流体仿真器管理球和鸭子
-    simulator = FluidSimulator(fluid, container, rigid_bodies=[ball1, ball2], has_rigid=True)
+    simulator = FluidSimulator(fluid, container)
     
 
     # --- 5. 渲染器设置 ---
