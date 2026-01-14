@@ -133,6 +133,7 @@ def run_simple_render():
         scene.point_light(pos=(0, -10, 10), color=(1, 1, 1))
         scene.ambient_light((0.3, 0.3, 0.3))
 
+        rigid.update_aabb()
         # 物理模拟
         # 优化后：融合内核减少了开销，substeps 降低到 30 (足以保持稳定性)
         cloth.step(dt=0.005, rigid_bodies=[rigid], substeps=100)

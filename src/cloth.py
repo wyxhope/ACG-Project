@@ -194,7 +194,7 @@ class Cloth:
                         continue
                     impulse = -(1 + restitution) * v_n * self.mass
                     ti.atomic_add(rb.vel[None], -impulse * normal / rb.mass)
-
+                    ti.atomic_add(rb.ang_vel[None], -impulse * r.cross(normal) @ rb.I_inv[None])
 
     def step(self, dt, rigid_bodies=None, substeps=100, wind_t=None, gravity=ti.Vector([0.0, 0.0, -9.8]), thickness=0.05):
         """执行多子步模拟"""
