@@ -129,6 +129,8 @@ def run_simple_render():
             rigid.ang_vel[None] = ti.Vector([0.0, 0.0, 0.0])
         # -----------------------------
 
+        rigid.update_aabb()
+
         # 灯光
         scene.point_light(pos=(0, -10, 10), color=(1, 1, 1))
         scene.ambient_light((0.3, 0.3, 0.3))
