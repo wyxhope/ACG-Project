@@ -3,7 +3,6 @@ import os
 import site
 import math
 import json
-import time
 import numpy as np
 import concurrent.futures
 import itertools
@@ -130,17 +129,10 @@ def custom_rigid_body_simulation(config):
     renderer.add_static_mesh(container.mesh, name=fluid_conf['name'] + "_container", material_names="Glass")
     renderer.objects[fluid_conf['name'] + "_container"].hide_render = True 
     renderer.objects[fluid_conf['name'] + "_container"].hide_viewport = True
-    simulator = FluidSimulator(fluid, container, rigid_bodies=bodie, has_rigid=len(bodie)>0)
+    simulator = FluidSimulator(fluid, container)
     water = {'water': fluid, 'simulator': simulator, 'conf': fluid_conf}
 
     # --- 5. Simulation Loop ---
-    
-    # Profiling stats
-    total_time_cloth = 0
-    total_time_fluid = 0
-    total_time_collision = 0
-    total_time_render = 0
-
     print("Warming up...")
     for frame in range(10):
         for curtain in curtains:
@@ -150,21 +142,15 @@ def custom_rigid_body_simulation(config):
     
     candidates = list(itertools.combinations(range(len(bodies)), 2))
     for frame in range(num_frames):
-        t0 = time.time()
+        
+        for body_dict in bodies:
+            body = body_dict['obj']
+            body.update_aabb()
         for curtain in curtains:
             curtain['obj'].step(dt, substeps=8000, wind_t=frame*dt, gravity=gravity)
         for net in nets:
             net['obj'].step(dt, substeps=5000, rigid_bodies=bodie, gravity=gravity, thickness=0.2)
-        t1 = time.time()
-        total_time_cloth += (t1 - t0)
-
-        t0 = time.time()
-        water['simulator'].step(dt)
-        t1 = time.time()
-        total_time_fluid += (t1 - t0)
-        
-
-        t0 = time.time()
+        water['simulator'].step(dt, rigid_bodies=bodie, has_rigid=len(bodie)>0, gravity=gravity)
         
         for i, j in candidates:
             body1_dict = bodies[i]
@@ -182,11 +168,8 @@ def custom_rigid_body_simulation(config):
                 sphere_box_collision_simulation(b2, b1, threshold)
             if b1.type == 'box' and b2.type == 'box':
                 box_collision_simulation(b1, b2, threshold)
-        t1 = time.time()
-        total_time_collision += (t1 - t0)
 
         # --- 6. Render Frame ---
-        t0 = time.time()
         p_np = water['water'].pos.to_numpy()[:water['water'].num_particles[None]]
         renderer.update_fluid(p_np, name=water['conf']['name'], particle_radius=water['conf']['particle_radius'])
 
@@ -204,35 +187,7 @@ def custom_rigid_body_simulation(config):
             renderer.update_cloth(curtain['obj'], name=curtain['conf']['name'], material_params=curtain['conf'].get('material', {'color': (0.8, 0.2, 0.2, 1.0)}))
         renderer.render_frame(frame)
         print(f"Rendered Frame {frame}/{num_frames}")
-        t1 = time.time()
-        total_time_render += (t1 - t0)
-    
-    print("\n--- Timing Analysis (Average per frame) ---")
-    if num_frames > 0:
-        print(f"  Cloth/Net Step: {total_time_cloth / num_frames * 1000:.2f} ms")
-        
-        # Detailed Cloth Analysis
-        total_cloth_forces = 0
-        total_cloth_collision = 0
-        total_cloth_update = 0
-        
-        # Aggregate stats from all cloths (nets and curtains)
-        all_cloths = [c['obj'] for c in curtains] + [n['obj'] for n in nets]
-        for cloth in all_cloths:
-            if hasattr(cloth, 'breakdown_timers'):
-                total_cloth_forces += cloth.breakdown_timers['forces']
-                total_cloth_collision += cloth.breakdown_timers['collision']
-                total_cloth_update += cloth.breakdown_timers['update']
-        
-        if all_cloths: # divided by num_frames to match previous scale
-             print(f"    - Compute Forces: {total_cloth_forces / num_frames * 1000:.2f} ms")
-             print(f"    - Rigid Collision: {total_cloth_collision / num_frames * 1000:.2f} ms")
-             print(f"    - Position Update: {total_cloth_update / num_frames * 1000:.2f} ms")
 
-        print(f"  Fluid Step    : {total_time_fluid / num_frames * 1000:.2f} ms")
-        print(f"  Rigid Collision     : {total_time_collision / num_frames * 1000:.2f} ms")
-        print(f"  Render        : {total_time_render / num_frames * 1000:.2f} ms")
-    print("-------------------------------------------\n")
 
     # --- 7. Create Video ---
     print("Rendering completed. Creating video...")

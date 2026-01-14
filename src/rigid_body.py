@@ -17,6 +17,11 @@ class RigidBody:
                  restitution=0.5):
         self.pos_of_center = ti.Vector.field(3, dtype=float, shape=()) 
         self.pos_of_center[None] = ti.Vector(pos)
+        
+        self.aabb_min = ti.Vector.field(3, dtype=float, shape=())
+        self.aabb_max = ti.Vector.field(3, dtype=float, shape=())
+        self.aabb_min[None] = ti.Vector([0.0, 0.0, 0.0])
+        self.aabb_max[None] = ti.Vector([0.0, 0.0, 0.0])
 
         self.mass = mass
         if is_fixed:
@@ -195,6 +200,38 @@ class RigidBody:
         
         return dist, normal
 
+    @ti.kernel
+    def update_aabb(self):
+        threshold = 0.2
+        if ti.static(self.type == 'sphere'):
+            center = self.pos_of_center[None]
+            r = self.radius
+            self.aabb_min[None] = center - ti.Vector([r, r, r]) - ti.Vector([threshold, threshold, threshold])
+            self.aabb_max[None] = center + ti.Vector([r, r, r]) + ti.Vector([threshold, threshold, threshold])
+        elif ti.static(self.type == 'box'):
+            center = self.pos_of_center[None]
+            R = self.quat_to_matrix(self.quat[None])
+            half_extents = ti.Vector([self.shape[0]*0.5, self.shape[1]*0.5, self.shape[2]*0.5])
+            
+            min_v = ti.Vector([1e9, 1e9, 1e9])
+            max_v = ti.Vector([-1e9, -1e9, -1e9])
+            
+            for i in ti.static(range(8)):
+                offset = ti.Vector([
+                    half_extents.x * (1 if (i & 1) else -1),
+                    half_extents.y * (1 if (i & 2) else -1),
+                    half_extents.z * (1 if (i & 4) else -1)
+                ])
+                corner = center + R @ offset
+                min_v = ti.min(min_v, corner)
+                max_v = ti.max(max_v, corner)
+            
+            self.aabb_min[None] = min_v - ti.Vector([threshold, threshold, threshold])
+            self.aabb_max[None] = max_v + ti.Vector([threshold, threshold, threshold])
+        else:
+            r = 1e3
+            self.aabb_min[None] = ti.Vector([-r, -r, -r])
+            self.aabb_max[None] = ti.Vector([r, r, r])
 
     @ti.func
     def quat_mul(self, q1, q2):

@@ -1,6 +1,5 @@
 import taichi as ti
 import numpy as np
-import time
 
 @ti.data_oriented
 class Cloth:
@@ -18,6 +17,9 @@ class Cloth:
         self.is_curtain = is_curtain
         self.compress_ratio = compress_ratio
         
+        self.aabb_min = ti.Vector.field(3, dtype=float, shape=())
+        self.aabb_max = ti.Vector.field(3, dtype=float, shape=())
+
         # 弹簧连接关系 (x偏移, y偏移, 弹簧原长系数, 刚度系数)
         self.spring_offsets = []
         
@@ -139,6 +141,16 @@ class Cloth:
                 self.vel[i, j] = ti.Vector([0.0, 0.0, 0.0])
                 
     @ti.kernel
+    def update_aabb(self):
+        self.aabb_min[None] = ti.Vector([1e9, 1e9, 1e9])
+        self.aabb_max[None] = ti.Vector([-1e9, -1e9, -1e9])
+        for i, j in self.pos:
+            p = self.pos[i, j]
+            for k in ti.static(range(3)):
+                ti.atomic_min(self.aabb_min[None][k], p[k])
+                ti.atomic_max(self.aabb_max[None][k], p[k])
+
+    @ti.kernel
     def solve_rigid_collision(self, rb: ti.template(), thickness: float):
         """
         利用 RigidBody 的 SDF 进行碰撞解算
@@ -194,31 +206,35 @@ class Cloth:
         
         if not hasattr(self, 'breakdown_timers'):
             self.breakdown_timers = {'forces': 0.0, 'collision': 0.0, 'update': 0.0, 'total_steps': 0}
-            
+
+        self.update_aabb()
+
+        overlap_map = {}
+        if rigid_bodies:
+            for rb in rigid_bodies:
+                rb_min = rb.aabb_min[None]
+                rb_max = rb.aabb_max[None]
+                # Level 1 AABB Check (Cloth AABB vs RB AABB)
+                c_min = self.aabb_min[None]
+                c_max = self.aabb_max[None]
+                
+                # Axis Aligned Intersection Test
+                overlap = True
+                if c_max.x < rb_min.x or c_min.x > rb_max.x: overlap = False
+                elif c_max.y < rb_min.y or c_min.y > rb_max.y: overlap = False
+                elif c_max.z < rb_min.z or c_min.z > rb_max.z: overlap = False
+
+                overlap_map[rb] = overlap
+
         for _ in range(substeps):
-            t0 = time.time()
             self.compute_forces(gravity)
             if wind_t is not None:
                 self.apply_wind(wind_t)
-            t1 = time.time()
-            t_forces += (t1 - t0)
-            
-            t0 = time.time()
             if rigid_bodies:
                 for rb in rigid_bodies:
-                    self.solve_rigid_collision(rb, thickness)
-            t1 = time.time()
-            t_collision += (t1 - t0)
-            
-            t0 = time.time()
+                    if overlap_map[rb]:
+                        self.solve_rigid_collision(rb, thickness)
             self.update(dt)
-            t1 = time.time()
-            t_update += (t1 - t0)
-            
-        self.breakdown_timers['forces'] += t_forces
-        self.breakdown_timers['collision'] += t_collision
-        self.breakdown_timers['update'] += t_update
-        self.breakdown_timers['total_steps'] += substeps
 
     def get_indices(self):
         """生成三角形拓扑结构 (用于Blender渲染)"""

@@ -5,25 +5,17 @@ from .fluid import Fluid, Container
 
 @ti.data_oriented
 class FluidSimulator:
-    def __init__(self, fluid: Fluid, container: Container, rigid_bodies: list[RigidBody], has_rigid: bool = True):
+    def __init__(self, fluid: Fluid, container: Container):
         self.fluid = fluid
         self.container = container
-        self.has_rigid = has_rigid
-        if has_rigid:
-            self.rigid_bodies = rigid_bodies
     
     @ti.kernel
-    def solve_rigid_interaction(self, dt: float):
-        # 获取刚体对象
-        if ti.static(not self.has_rigid):
-            return
-
+    def solve_rigid_interaction(self, dt: float, rigid_bodies: ti.template()):
         
         for i in range(self.fluid.num_particles[None]):
             pos = self.fluid.pos[i]
 
-            for rb in ti.static(self.rigid_bodies):
-                
+            for rb in ti.static(rigid_bodies):
                 # 1. 查询 SDF：获取距离和法线
                 dist, normal = rb.get_sdf(pos)
                 
@@ -87,21 +79,37 @@ class FluidSimulator:
                     
                     self.fluid.pos[i] += normal * penetration 
 
-    def step(self, dt):
+    def step(self, dt, rigid_bodies: list[RigidBody] = [], has_rigid: bool = True, gravity: ti.Vector = ti.Vector([0.0, 0.0, -9.81])):
         substeps = 50
         sub_dt = dt / substeps
+
+        if has_rigid:
+            overlapping_bodies = []
+            for rb in rigid_bodies:
+                c_min = self.container.position
+                c_max = self.container.position + self.container.boundary_box
+                rb_min = rb.aabb_min[None]
+                rb_max = rb.aabb_max[None]
+
+                # Check for overlap (inverse of separation)
+                is_overlapping = not (rb_max.x < c_min.x or rb_min.x > c_max.x or
+                    rb_max.y < c_min.y or rb_min.y > c_max.y or
+                    rb_max.z < c_min.z or rb_min.z > c_max.z)
+                if is_overlapping:
+                    overlapping_bodies.append(rb)
+
         for _ in range(substeps):
             self.fluid.update_grid()
             self.fluid.compute_density()
             self.fluid.compute_forces()
 
-            if self.has_rigid:
-                self.solve_rigid_interaction(sub_dt)
-                for rb in ti.static(self.rigid_bodies):
-                    gravity_force = ti.Vector([0.0, 0.0, -9.81]) * rb.mass
+            if has_rigid:
+                self.solve_rigid_interaction(sub_dt, tuple(overlapping_bodies))
+                for rb in rigid_bodies:
+                    gravity_force = gravity * rb.mass
                     rb.apply_force(gravity_force, sub_dt)
             self.fluid.integrate(sub_dt)
             self.container.enforce_boundary(self.fluid)
-            if self.has_rigid:
-                for rb in ti.static(self.rigid_bodies):
+            if has_rigid:
+                for rb in ti.static(rigid_bodies):
                     rb.update(sub_dt)
