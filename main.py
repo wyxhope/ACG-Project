@@ -179,7 +179,7 @@ def fluid_online_simulation(fluid_online_output_dir):
     fluid_pos = [-1.0, -1.0, 0.5]
     fluid = Fluid(max_particles=500000, init_box=(2.0, 2.0, 2.0), position=fluid_pos, particle_radius=particle_radius, viscosity=1.0)
     fluid.init_cube(spacing=particle_radius*2.0) 
-    simulator = FluidSimulator(fluid, container, rigid_bodies=[], has_rigid=False)
+    simulator = FluidSimulator(fluid, container)
 
     # 2. 初始化渲染器
     # 注意：这里直接使用 fluid_output_dir，或者你可以新建一个 fluid_online_output_dir
@@ -195,7 +195,7 @@ def fluid_online_simulation(fluid_online_output_dir):
     # 3. 主循环：模拟 -> 传输 -> 渲染
     for frame in range(num_frames):
         # --- A. 物理计算 (GPU) ---
-        simulator.step(dt)
+        simulator.step(dt=dt, rigid_bodies=[], has_rigid=False)
         
         # --- B. 数据传输 (内存复制, 极快) ---
         # 获取有效粒子数
@@ -582,7 +582,8 @@ def chain_reaction_demo():
     print(f"Video saved to {video_path}")
 
 def main():
-    chain_reaction_demo()
+    # chain_reaction_demo()
+    fluid_online_simulation(fluid_online_output_dir=os.path.join(output_dir, "fluid_online_simulation"))
 
     
 
