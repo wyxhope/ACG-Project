@@ -509,7 +509,7 @@ def chain_reaction_demo():
     fluid = Fluid(max_particles=500000, position=[-1.8, -1.8, 0.2], init_box=(3.6, 3.6, 1.0), particle_radius=0.02)
     fluid.init_cube(spacing=2*fluid.particle_radius)
     # 流体仿真器管理球和鸭子
-    simulator = FluidSimulator(fluid, container, rigid_bodies=[ball1, ball2], has_rigid=True)
+    simulator = FluidSimulator(fluid, container)
     
 
     # --- 5. 渲染器设置 ---
@@ -531,10 +531,10 @@ def chain_reaction_demo():
     for frame in range(num_frames):
         # 1. 刚体-布料交互 (球与安全网)
         t = frame * dt
-        safety_net.step(dt, substeps=5000, rigid_bodies=[ball1, ball2])
-        
+        safety_net.step(dt, substeps=5000, rigid_bodies=[ball1, ball2], gravity=gravity)
+
         # 2. 窗帘自更新 (简单摆动)
-        curtain_l.step(dt, substeps=8000, wind_t=t)
+        curtain_l.step(dt, substeps=8000, wind_t=t, gravity=gravity)
         
         # 3. 流体-刚体交互 (水与球、鸭子)
         
@@ -544,9 +544,11 @@ def chain_reaction_demo():
         sphere_box_collision_simulation(ball2, table, 1e-3)
         sphere_box_collision_simulation(ball1, wall, 1e-3)
         sphere_box_collision_simulation(ball2, wall, 1e-3)
+        ball1.update_aabb()
+        ball2.update_aabb()
 
         sphere_collision_simulation(ball1, ball2, 1e-3)
-        simulator.step(dt) 
+        simulator.step(dt, rigid_bodies=[ball1, ball2], has_rigid=True, gravity=gravity)
 
 
         # --- 渲染数据传输 ---
